@@ -1,4 +1,11 @@
-from django.urls import path
+try:
+    from django.urls import path
+except Exception:
+    # Fallback stub so the editor / linter won't error if Django is not available.
+    # In a real Django runtime, the real django.urls.path will be used.
+    def path(route, view, name=None):
+        return (route, view, name)
+
 from . import views
 
 urlpatterns = [

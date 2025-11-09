@@ -66,12 +66,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#">
+                        <a class="nav-link" href="javascript:void(0);">
                             <i class="bi bi-people me-1"></i>Guardias
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#">
+                        <a class="nav-link" href="{% url 'sedes_list' %}">
                             <i class="bi bi-building me-1"></i>Sedes
                         </a>
                     </li>
@@ -83,11 +83,11 @@
                 </ul>
                 
                 <div class="navbar-nav">
-                    <li class="nav-item">
+                    <div class="nav-item">
                         <span class="nav-link text-light">
                             <i class="bi bi-person-circle me-1"></i>Administrador
                         </span>
-                    </li>
+                    </div>
                 </div>
             </div>
         </div>
@@ -133,36 +133,62 @@
     <script>
         // Función helper para llamadas API
         async function api(url, options = {}) {
-            const response = await fetch(url, {
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    ...options.headers
-                },
-                ...options
-            });
-            
+            // Construir headers por defecto
+            const defaultHeaders = {
+                'Accept': 'application/json'
+            };
+
+            // Si el body no es FormData, asumir JSON por defecto
+            const isFormData = options.body instanceof FormData;
+            if (!isFormData) defaultHeaders['Content-Type'] = 'application/json';
+
+            // CSRF token (Django): si hay cookie 'csrftoken' y el método no es GET, añadir cabecera
+            function getCookie(name) {
+                const v = document.cookie.match('(?:^|;)\\s*' + name + '=([^;]*)');
+                return v ? decodeURIComponent(v[1]) : null;
+            }
+
+            const method = (options.method || 'GET').toUpperCase();
+            const headers = Object.assign({}, defaultHeaders, options.headers || {});
+            if (method !== 'GET' && document.location.protocol.startsWith('http')) {
+                const csrftoken = getCookie('csrftoken');
+                if (csrftoken && !headers['X-CSRFToken']) headers['X-CSRFToken'] = csrftoken;
+            }
+
+            const response = await fetch(url, Object.assign({}, options, { headers }));
+
+            // Manejo de errores
             if (!response.ok) {
-                const error = await response.json().catch(() => ({ error: response.statusText }));
+                let error;
+                try {
+                    error = await response.json();
+                } catch (e) {
+                    // respuesta no JSON
+                    error = { error: response.statusText };
+                }
                 throw new Error(error.error || `Error ${response.status}`);
             }
-            
-            return await response.json();
+
+            // Intentar devolver JSON, si no, devolver texto
+            const ct = response.headers.get('content-type') || '';
+            if (ct.includes('application/json')) {
+                return await response.json();
+            }
+            return await response.text();
         }
 
         // Utilidad para formatear fechas
         function formatDate(dateString) {
             if (!dateString) return '-';
             const date = new Date(dateString);
+            if (isNaN(date.getTime())) return '-';
             return date.toLocaleString('es-ES');
         }
 
         // Inicializar tooltips de Bootstrap
         document.addEventListener('DOMContentLoaded', function() {
             const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-            const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-                return new bootstrap.Tooltip(tooltipTriggerEl);
-            });
+            tooltipTriggerList.forEach(function (el) { new bootstrap.Tooltip(el); });
         });
     </script>
 

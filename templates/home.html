@@ -8,6 +8,7 @@
       <div class="card-header fw-bold">Generar rotación (24h)</div>
       <div class="card-body">
         <form id="form-gen" class="row g-3">
+          {% csrf_token %}
           <div class="col-12">
             <label class="form-label">Sede</label>
             <select class="form-select" id="sede_id" required>
@@ -19,12 +20,12 @@
           </div>
           <div class="col-md-6">
             <label class="form-label">Ciclo (YYYY-MM-DD HH:MM)</label>
-            <input type="text" class="form-control" id="ciclo" placeholder="2025-11-10 07:00" required>
+            <input type="datetime-local" class="form-control" id="ciclo" required>
             <div class="form-text">Inicio y ancla del ciclo de 24h</div>
           </div>
           <div class="col-md-6">
             <label class="form-label">Inicio (YYYY-MM-DD HH:MM)</label>
-            <input type="text" class="form-control" id="inicio" placeholder="2025-11-10 07:00" required>
+            <input type="datetime-local" class="form-control" id="inicio" placeholder="2025-11-10T07:00" required>
           </div>
           <div class="col-12">
             <button class="btn btn-primary" type="submit">Generar rotación</button>
@@ -40,6 +41,7 @@
       <div class="card-header fw-bold">Consultar turnos de un ciclo</div>
       <div class="card-body">
         <form id="form-q" class="row g-3">
+          {% csrf_token %}
           <div class="col-md-6">
             <label class="form-label">Sede</label>
             <select class="form-select" id="qsede" required>
@@ -50,7 +52,7 @@
           </div>
           <div class="col-md-6">
             <label class="form-label">Ciclo (YYYY-MM-DD HH:MM)</label>
-            <input type="text" class="form-control" id="qciclo" placeholder="2025-11-09 07:00" required>
+            <input type="datetime-local" class="form-control" id="qciclo" required>
           </div>
           <div class="col-12">
             <button class="btn btn-secondary" type="submit">Listar turnos</button>
@@ -90,93 +92,156 @@
 
 {% block scripts %}
 <script>
-const tbody = document.getElementById('turnos-tbody');
-const turnosBox = document.getElementById('turnos-box');
-const eventosPre = document.getElementById('eventos');
-const sedeSelect = document.getElementById('sede_id');
-const hintMax = document.getElementById('max_guardias_hint');
-const hintSlot = document.getElementById('slot_minutos_hint');
+document.addEventListener('DOMContentLoaded', function () {
+  // Elementos cacheados
+  const tbody = document.getElementById('turnos-tbody');
+  const turnosBox = document.getElementById('turnos-box');
+  const eventosPre = document.getElementById('eventos');
+  const sedeSelect = document.getElementById('sede_id');
+  const hintMax = document.getElementById('max_guardias_hint');
+  const hintSlot = document.getElementById('slot_minutos_hint');
+  const qsede = document.getElementById('qsede');
 
-async function cargarEventos() {
-  try {
-    const data = await api('/api/reportes/eventos/');
-    eventosPre.textContent = JSON.stringify(data, null, 2);
-  } catch (e) {
-    eventosPre.textContent = e.message || String(e);
-  }
-}
-cargarEventos();
-
-function actualizarHintsSede() {
-  const opt = sedeSelect.options[sedeSelect.selectedIndex];
-  // En esta demo no tenemos API para sedes; si quisieras, hacemos un endpoint.
-  // Para ahora, dejemos hints vacíos. Alternativa rápida: data-attributes en options.
-}
-actualizarHintsSede();
-
-document.getElementById('form-gen').addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const sede_id = document.getElementById('sede_id').value;
-  const ciclo   = document.getElementById('ciclo').value;
-  const inicio  = document.getElementById('inicio').value;
-  const msg = document.getElementById('gen-msg');
-  msg.textContent = '';
-  msg.className = '';
-
-  try {
-    await api('/api/rotacion/generar/', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ sede_id, ciclo, inicio })
-    });
-    msg.textContent = '✓ Rotación generada';
-    msg.className = 'text-success';
-    cargarEventos();
-  } catch (e) {
-    msg.textContent = '✗ ' + (e.message || e);
-    msg.className = 'text-danger';
-  }
-});
-
-document.getElementById('form-q').addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const sede_id = document.getElementById('qsede').value;
-  const ciclo   = document.getElementById('qciclo').value.replace(' ', '_');
-  tbody.innerHTML = '';
-  turnosBox.classList.add('d-none');
-  try {
-    const data = await api(`/api/turnos/${sede_id}/${ciclo}/`);
-    for (const t of data.turnos) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${t.turno_id}</td>
-        <td>${t.guardia||''}</td>
-        <td>${t.inicio}</td>
-        <td>${t.fin}</td>
-        <td>${t.horas}</td>
-        <td>${t.jornada||''}</td>
-        <td>
-          <button data-id="${t.turno_id}" class="btn btn-sm btn-outline-danger btn-del">Eliminar</button>
-        </td>`;
-      tbody.appendChild(tr);
+  // Cargar y mostrar eventos recientes
+  async function cargarEventos() {
+    try {
+      const data = await api('/api/reportes/eventos/');
+      eventosPre.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      eventosPre.textContent = e.message || String(e);
     }
-    turnosBox.classList.remove('d-none');
-  } catch (e) {
-    alert(e.message || e);
   }
-});
+  cargarEventos();
 
-tbody.addEventListener('click', async (ev) => {
-  const btn = ev.target.closest('.btn-del');
-  if (!btn) return;
-  const id = btn.getAttribute('data-id');
-  if (!confirm(`¿Eliminar turno ${id} y ajustar vecinos?`)) return;
-  try {
-    await api(`/api/turno/eliminar/${id}/`, { method: 'POST' });
-    btn.closest('tr').remove();
-    cargarEventos();
-  } catch (e) {
-    alert(e.message || e);
+  // Mostrar metadatos de la sede seleccionada (si la API lo soporta)
+  async function updateSedeHints(id) {
+    if (!id) {
+      hintMax.textContent = '—';
+      hintSlot.textContent = '—';
+      return;
+    }
+    try {
+      const s = await api(`/api/sedes/${encodeURIComponent(id)}/`);
+      hintMax.textContent = s.max_guardias ?? s.max_guardias_permitidos ?? '—';
+      hintSlot.textContent = s.slot_minutos ?? s.slot_min ?? '—';
+    } catch (e) {
+      // not critical
+      hintMax.textContent = '—';
+      hintSlot.textContent = '—';
+    }
+  }
+  if (sedeSelect) {
+    sedeSelect.addEventListener('change', () => updateSedeHints(sedeSelect.value));
+    // intentar llenar en carga
+    if (sedeSelect.value) updateSedeHints(sedeSelect.value);
+  }
+
+  // Generar rotación
+  const formGen = document.getElementById('form-gen');
+  if (formGen) {
+    formGen.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const sede_id = document.getElementById('sede_id').value;
+      const ciclo = document.getElementById('ciclo').value;
+      const inicio = document.getElementById('inicio').value;
+      const msg = document.getElementById('gen-msg');
+      msg.textContent = '';
+      msg.className = '';
+
+      if (!sede_id || !ciclo || !inicio) {
+        msg.textContent = '✗ Complete todos los campos';
+        msg.className = 'text-danger';
+        return;
+      }
+
+      try {
+        await api('/api/rotacion/generar/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sede_id, ciclo, inicio })
+        });
+        msg.textContent = '✓ Rotación generada';
+        msg.className = 'text-success';
+        cargarEventos();
+      } catch (e) {
+        msg.textContent = '✗ ' + (e.message || e);
+        msg.className = 'text-danger';
+      }
+    });
+  }
+
+  // Consultar turnos de un ciclo
+  const formQ = document.getElementById('form-q');
+  if (formQ) {
+    formQ.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const sede_id = (document.getElementById('qsede') || {}).value;
+      const qcicloRaw = (document.getElementById('qciclo') || {}).value || '';
+      const qciclo = encodeURIComponent(qcicloRaw.trim());
+      if (!sede_id || !qcicloRaw) {
+        alert('Seleccione una sede y un ciclo');
+        return;
+      }
+
+      tbody.innerHTML = '';
+      turnosBox.classList.add('d-none');
+      try {
+        const data = await api(`/api/turnos/${encodeURIComponent(sede_id)}/${qciclo}/`);
+        const items = Array.isArray(data) ? data : (data.turnos || data.results || []);
+        if (!items.length) {
+          tbody.innerHTML = `<tr><td colspan="7" class="text-muted">No hay turnos para el ciclo solicitado</td></tr>`;
+          turnosBox.classList.remove('d-none');
+          return;
+        }
+
+        for (const t of items) {
+          const tr = document.createElement('tr');
+          const tdId = document.createElement('td'); tdId.textContent = t.turno_id ?? '';
+          const tdG = document.createElement('td'); tdG.textContent = t.guardia ?? '';
+          const tdInicio = document.createElement('td'); tdInicio.textContent = t.inicio ?? '';
+          const tdFin = document.createElement('td'); tdFin.textContent = t.fin ?? '';
+          const tdHoras = document.createElement('td'); tdHoras.textContent = t.horas ?? '';
+          const tdJ = document.createElement('td'); tdJ.textContent = t.jornada ?? '';
+          const tdAcc = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm btn-outline-danger btn-del';
+          btn.dataset.id = t.turno_id ?? '';
+          btn.textContent = 'Eliminar';
+          tdAcc.appendChild(btn);
+
+          tr.appendChild(tdId);
+          tr.appendChild(tdG);
+          tr.appendChild(tdInicio);
+          tr.appendChild(tdFin);
+          tr.appendChild(tdHoras);
+          tr.appendChild(tdJ);
+          tr.appendChild(tdAcc);
+          tbody.appendChild(tr);
+        }
+        turnosBox.classList.remove('d-none');
+      } catch (e) {
+        alert(e.message || e);
+      }
+    });
+  }
+
+  // Delegación para botones Eliminar
+  if (tbody) {
+    tbody.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('.btn-del');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      if (!id) return;
+      if (!confirm(`¿Eliminar turno ${id} y ajustar vecinos?`)) return;
+      try {
+        await api(`/api/turno/eliminar/${encodeURIComponent(id)}/`, { method: 'POST' });
+        btn.closest('tr').remove();
+        cargarEventos();
+      } catch (e) {
+        alert(e.message || e);
+      }
+    });
   }
 });
 </script>
