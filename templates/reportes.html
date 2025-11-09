@@ -8,12 +8,92 @@
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-clock-history me-2"></i>Eventos Recientes del Sistema</span>
-    <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-eventos">
-      <i class="bi bi-arrow-clockwise me-1"></i>Refrescar
-    </button>
+    <div class="d-flex gap-2 align-items-center">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" id="auto-refresh-toggle" title="Auto-actualizar cada 30s">
+        <label class="form-check-label small" for="auto-refresh-toggle">Auto-refresh</label>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-eventos">
+        <i class="bi bi-arrow-clockwise me-1 icon-rotate"></i>Refrescar
+      </button>
+    </div>
   </div>
   <div class="card-body">
-    <pre id="eventos-pre" class="mono small bg-light p-3 border rounded" style="max-height: 300px; overflow:auto;">Cargando eventos...</pre>
+    <!-- Filtros avanzados -->
+    <div class="filters-panel mb-3">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label small mb-1">Buscar texto</label>
+          <input type="search" id="eventos-filter" class="form-control form-control-sm" placeholder="Filtrar por texto...">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small mb-1">Tipo de evento</label>
+          <select id="eventos-tipo-filter" class="form-select form-select-sm">
+            <option value="">Todos</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small mb-1">Desde fecha</label>
+          <input type="date" id="eventos-fecha-desde" class="form-control form-control-sm">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small mb-1">Hasta fecha</label>
+          <input type="date" id="eventos-fecha-hasta" class="form-control form-control-sm">
+        </div>
+        <div class="col-md-1">
+          <button class="btn btn-sm btn-outline-danger w-100" id="btn-clear-filters" title="Limpiar filtros">
+            <i class="bi bi-x-circle"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="table-responsive custom-scrollbar">
+      <table class="table table-sm table-hover align-middle" id="eventos-table">
+        <thead>
+          <tr>
+            <th style="width: 18%">Fecha</th>
+            <th style="width: 12%">Tipo</th>
+            <th style="width: 10%">Sede</th>
+            <th style="width: 10%">Guardia</th>
+            <th style="width: 10%">Turno</th>
+            <th>Detalle</th>
+          </tr>
+        </thead>
+        <tbody id="eventos-tbody">
+          <tr><td colspan="6" class="text-muted">Cargando eventos...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    
+    <div class="d-flex justify-content-between align-items-center mt-3">
+      <div class="pagination-info">
+        <span id="eventos-msg" class="text-muted"></span>
+        <span class="badge text-bg-secondary" id="eventos-count">0</span>
+        <span class="text-muted small">eventos</span>
+      </div>
+      <button class="btn btn-sm btn-outline-primary btn-load-more d-none" id="btn-load-more">
+        <i class="bi bi-arrow-down-circle me-1"></i>Ver más eventos
+      </button>
+    </div>
+  </div>
+  
+  <!-- Modal Detalle Evento -->
+  <div class="modal fade" id="eventoModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-info-circle me-2"></i>Detalle del Evento</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <pre id="evento-detalle" class="mono small bg-light p-3 border rounded mb-0 custom-scrollbar" style="max-height: 60vh; overflow: auto;"></pre>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -94,8 +174,24 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function(){
-  const eventosPre = document.getElementById('eventos-pre');
   const btnRefreshEventos = document.getElementById('btn-refresh-eventos');
+  const eventosTbody = document.getElementById('eventos-tbody');
+  const eventosFilter = document.getElementById('eventos-filter');
+  const eventosTipoFilter = document.getElementById('eventos-tipo-filter');
+  const eventosFechaDesde = document.getElementById('eventos-fecha-desde');
+  const eventosFechaHasta = document.getElementById('eventos-fecha-hasta');
+  const eventosCount = document.getElementById('eventos-count');
+  const eventosMsg = document.getElementById('eventos-msg');
+  const btnLoadMore = document.getElementById('btn-load-more');
+  const btnClearFilters = document.getElementById('btn-clear-filters');
+  const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
+  
+  let eventosData = [];
+  let eventosFiltered = [];
+  let eventosPagina = 0;
+  const eventosPorPagina = 25;
+  let autoRefreshInterval = null;
+  const LS_KEY = 'reportes.eventos';
   
   const formHoras = document.getElementById('form-horas');
   const horasMsg = document.getElementById('horas-msg');
@@ -109,17 +205,247 @@ document.addEventListener('DOMContentLoaded', function(){
   const diariasResult = document.getElementById('diarias-result');
   const diariasTbody = document.getElementById('diarias-tbody');
 
-  // Cargar eventos recientes
-  async function cargarEventos() {
-    try {
-      const data = await api('/api/reportes/eventos/');
-      eventosPre.textContent = JSON.stringify(data, null, 2);
-    } catch (e) {
-      eventosPre.textContent = 'Error: ' + (e.message || e);
+  // Helpers para eventos
+  function badgeTipo(tipo) {
+    if (!tipo) return '<span class="badge text-bg-secondary">-</span>';
+    const t = String(tipo).toUpperCase();
+    const cls = t.includes('ERROR') ? 'danger' : t.includes('WARN') ? 'warning' : t.includes('INFO') ? 'primary' : 'secondary';
+    return `<span class="badge text-bg-${cls}">${tipo}</span>`;
+  }
+
+  function getRowClass(tipo) {
+    if (!tipo) return '';
+    const t = String(tipo).toUpperCase();
+    if (t.includes('ERROR')) return 'table-row-error';
+    if (t.includes('WARN')) return 'table-row-warning';
+    return '';
+  }
+
+  function renderEventos(list, append = false) {
+    if (!list?.length) {
+      eventosTbody.innerHTML = '<tr><td colspan="6" class="text-muted">Sin eventos.</td></tr>';
+      eventosCount.textContent = '0';
+      btnLoadMore.classList.add('d-none');
+      return;
+    }
+    
+    const start = append ? eventosPagina * eventosPorPagina : 0;
+    const end = start + eventosPorPagina;
+    const subset = list.slice(start, end);
+    
+    const rows = subset.map(ev => {
+      const detalle = ev.detalle ? String(ev.detalle) : '';
+      const detalleShort = detalle.length > 120 ? (detalle.slice(0, 120) + '…') : detalle;
+      const sede = ev.sede_id ?? '-';
+      const guardia = ev.guardia_id ?? '-';
+      const turno = ev.turno_id ?? '-';
+      const rowClass = getRowClass(ev.tipo_evento);
+      
+      return `
+        <tr class="${rowClass}">
+          <td><i class="bi bi-calendar-week me-1 text-muted"></i>${ev.fecha_evento || '-'}</td>
+          <td>${badgeTipo(ev.tipo_evento)}</td>
+          <td>${sede !== '-' ? `<span class="badge rounded-pill text-bg-light" title="Sede">${sede}</span>` : '-'}</td>
+          <td>${guardia !== '-' ? `<span class="badge rounded-pill text-bg-light" title="Guardia">${guardia}</span>` : '-'}</td>
+          <td>${turno !== '-' ? `<span class="badge rounded-pill text-bg-light" title="Turno">${turno}</span>` : '-'}</td>
+          <td class="text-truncate" style="max-width: 420px;">
+            <span title="${detalle.replace(/"/g,'&quot;')}">${detalleShort.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>
+            ${detalle ? `<button type="button" class="btn btn-link btn-sm ms-1 p-0 align-baseline" data-detalle="${encodeURIComponent(detalle)}" data-bs-toggle="modal" data-bs-target="#eventoModal">ver</button>` : ''}
+          </td>
+        </tr>
+      `;
+    }).join('');
+    
+    if (append) {
+      eventosTbody.insertAdjacentHTML('beforeend', rows);
+    } else {
+      eventosTbody.innerHTML = rows;
+    }
+    
+    eventosCount.textContent = String(list.length);
+    
+    // Mostrar u ocultar botón "Ver más"
+    const totalMostrados = append ? end : eventosPorPagina;
+    if (list.length > totalMostrados) {
+      btnLoadMore.classList.remove('d-none');
+    } else {
+      btnLoadMore.classList.add('d-none');
     }
   }
+
+  function applyEventosFilter() {
+    const q = (eventosFilter.value || '').trim().toLowerCase();
+    const tipo = (eventosTipoFilter.value || '').trim().toUpperCase();
+    const desde = eventosFechaDesde.value;
+    const hasta = eventosFechaHasta.value;
+    
+    eventosFiltered = eventosData.filter(ev => {
+      // Filtro de texto
+      if (q) {
+        const s = [ev.tipo_evento, ev.fecha_evento, ev.sede_id, ev.guardia_id, ev.turno_id, ev.detalle]
+          .map(v => (v == null ? '' : String(v).toLowerCase()))
+          .join(' ');
+        if (!s.includes(q)) return false;
+      }
+      
+      // Filtro de tipo
+      if (tipo && (!ev.tipo_evento || !String(ev.tipo_evento).toUpperCase().includes(tipo))) {
+        return false;
+      }
+      
+      // Filtro de fecha desde
+      if (desde && ev.fecha_evento) {
+        const evFecha = ev.fecha_evento.split(' ')[0]; // YYYY-MM-DD
+        if (evFecha < desde) return false;
+      }
+      
+      // Filtro de fecha hasta
+      if (hasta && ev.fecha_evento) {
+        const evFecha = ev.fecha_evento.split(' ')[0];
+        if (evFecha > hasta) return false;
+      }
+      
+      return true;
+    });
+    
+    eventosPagina = 0;
+    renderEventos(eventosFiltered, false);
+    
+    const total = eventosData.length;
+    const filtered = eventosFiltered.length;
+    if (filtered < total) {
+      eventosMsg.textContent = `Mostrando ${filtered} de ${total} evento(s)`;
+    } else {
+      eventosMsg.textContent = `${total} evento(s) total(es)`;
+    }
+
+    // Persistir filtros
+    try {
+      const state = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+      state.q = eventosFilter.value || '';
+      state.tipo = eventosTipoFilter.value || '';
+      state.desde = eventosFechaDesde.value || '';
+      state.hasta = eventosFechaHasta.value || '';
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+    } catch(_e) {}
+  }
+
+  function populateTipoFilter() {
+    const tipos = [...new Set(eventosData.map(e => e.tipo_evento).filter(Boolean))];
+    const options = tipos.map(t => `<option value="${t.toUpperCase()}">${t}</option>`).join('');
+    eventosTipoFilter.innerHTML = '<option value="">Todos los tipos</option>' + options;
+  }
+
+  // Cargar eventos recientes
+  async function cargarEventos(showLoading = true) {
+    if (showLoading) {
+      eventosMsg.textContent = 'Cargando...';
+      eventosMsg.className = 'text-muted loading-pulse';
+    }
+    
+    try {
+      const data = await api('/api/reportes/eventos/');
+      eventosData = data.eventos || [];
+      eventosFiltered = eventosData;
+      eventosPagina = 0;
+      
+      populateTipoFilter();
+      renderEventos(eventosFiltered, false);
+      
+      eventosMsg.textContent = `${eventosData.length} evento(s).`;
+      eventosMsg.className = 'text-muted';
+
+      // Restaurar filtros desde localStorage al cargar por primera vez
+      try {
+        const state = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        if (state) {
+          if (state.q != null) eventosFilter.value = state.q;
+          if (state.tipo != null) eventosTipoFilter.value = state.tipo;
+          if (state.desde != null) eventosFechaDesde.value = state.desde;
+          if (state.hasta != null) eventosFechaHasta.value = state.hasta;
+        }
+      } catch(_e) {}
+      applyEventosFilter();
+    } catch (e) {
+      eventosTbody.innerHTML = `<tr><td colspan="6" class="text-danger">${e.message || e}</td></tr>`;
+      eventosMsg.textContent = 'Error al cargar los eventos';
+      eventosMsg.className = 'text-danger';
+    }
+  }
+  
+  // Event listeners
   cargarEventos();
-  btnRefreshEventos.addEventListener('click', cargarEventos);
+  btnRefreshEventos.addEventListener('click', () => cargarEventos(true));
+  eventosFilter.addEventListener('input', applyEventosFilter);
+  eventosTipoFilter.addEventListener('change', applyEventosFilter);
+  eventosFechaDesde.addEventListener('change', applyEventosFilter);
+  eventosFechaHasta.addEventListener('change', applyEventosFilter);
+  
+  btnClearFilters.addEventListener('click', () => {
+    eventosFilter.value = '';
+    eventosTipoFilter.value = '';
+    eventosFechaDesde.value = '';
+    eventosFechaHasta.value = '';
+    applyEventosFilter();
+  });
+  
+  btnLoadMore.addEventListener('click', () => {
+    eventosPagina++;
+    renderEventos(eventosFiltered, true);
+  });
+  
+  // Auto-refresh toggle
+  autoRefreshToggle.addEventListener('change', (ev) => {
+    if (ev.target.checked) {
+      autoRefreshInterval = setInterval(() => cargarEventos(false), 30000);
+      eventosMsg.textContent = 'Auto-refresh activado (cada 30s)';
+      eventosMsg.className = 'text-success small';
+      try { const state = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); state.auto = true; localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(_e) {}
+      setTimeout(() => {
+        if (autoRefreshToggle.checked) {
+          eventosMsg.textContent = `${eventosData.length} evento(s).`;
+          eventosMsg.className = 'text-muted';
+        }
+      }, 3000);
+    } else {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+      }
+      eventosMsg.textContent = 'Auto-refresh desactivado';
+      eventosMsg.className = 'text-muted small';
+      try { const state = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); state.auto = false; localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch(_e) {}
+      setTimeout(() => {
+        eventosMsg.textContent = `${eventosData.length} evento(s).`;
+        eventosMsg.className = 'text-muted';
+      }, 2000);
+    }
+  });
+
+  // Restaurar estado del auto-refresh al iniciar
+  try {
+    const state = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    if (state && typeof state.auto === 'boolean') {
+      autoRefreshToggle.checked = !!state.auto;
+      // Disparar el change para aplicar intervalo si corresponde
+      autoRefreshToggle.dispatchEvent(new Event('change'));
+    }
+  } catch(_e) {}
+
+  // Abrir modal de detalle
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-bs-target="#eventoModal"][data-detalle]');
+    if (!btn) return;
+    const raw = decodeURIComponent(btn.getAttribute('data-detalle'));
+    const pre = document.getElementById('evento-detalle');
+    // Intentar pretty JSON si aplica
+    try {
+      const parsed = JSON.parse(raw);
+      pre.textContent = JSON.stringify(parsed, null, 2);
+    } catch (_e) {
+      pre.textContent = raw;
+    }
+  });
 
   // Cargar sedes para el select
   async function cargarSedes() {

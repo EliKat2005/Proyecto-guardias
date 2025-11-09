@@ -31,6 +31,7 @@
                   data-ciudad="{{ s.ciudad }}"
                   data-slot="{{ s.slot_minutos }}"
                   data-max="{{ s.max_guardias }}">Editar</button>
+          <button type="button" class="btn btn-sm btn-outline-danger btn-eliminar-sede" data-id="{{ s.sede_id }}">Eliminar</button>
           {% if s.activo == 'S' %}
             <button type="button" class="btn btn-sm btn-outline-warning btn-toggle-sede" data-id="{{ s.sede_id }}" data-accion="N">Desactivar</button>
           {% else %}
@@ -46,6 +47,33 @@
 </div>
 <div class="mt-3">
   <button class="btn btn-sm btn-primary" id="btn-crear-sede">Crear sede</button>
+</div>
+
+<!-- Modal Confirm Eliminar Sede (con preview) -->
+<div class="modal fade" id="modalEliminarSede" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Eliminar sede</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">Vas a eliminar la sede <b id="del-sede-id"></b>. Antes de continuar, revisa las dependencias:</p>
+        <ul class="mb-2">
+          <li>Guardias asociados: <span id="del-sede-guardias" class="fw-bold">-</span></li>
+          <li>Turnos asociados: <span id="del-sede-turnos" class="fw-bold">-</span></li>
+        </ul>
+        <div id="del-sede-alert" class="alert alert-warning d-none" role="alert">
+          Existen dependencias. La eliminación fallará por integridad referencial a menos que remuevas o reasignes esos registros.
+        </div>
+        <div id="del-sede-msg" class="small"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="btn-confirm-eliminar-sede">Eliminar</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Modal Crear Sede -->
@@ -92,46 +120,71 @@
 document.addEventListener('DOMContentLoaded', function(){
   const modalEl = document.getElementById('modalSede');
   const modal = new bootstrap.Modal(modalEl);
+  const modalDelEl = document.getElementById('modalEliminarSede');
+  const modalDel = new bootstrap.Modal(modalDelEl);
   document.getElementById('btn-crear-sede').addEventListener('click', () => { modal.show(); });
 
   const form = document.getElementById('form-sede');
   const msg = document.getElementById('sede-msg');
   const crearBtn = document.getElementById('btn-crear-sede');
 
-  // Cuando se hace clic en editar, rellenar el formulario y cambiar acción
-  document.addEventListener('click', (ev) => {
-    const btn = ev.target.closest('.btn-editar-sede');
-    if (!btn) return;
-    // rellenar
-    form.nombre.value = btn.dataset.nombre || '';
-    form.ciudad.value = btn.dataset.ciudad || '';
-    form.slot_minutos.value = btn.dataset.slot || 120;
-    form.max_guardias.value = btn.dataset.max || 10;
-    form.dataset.editId = btn.dataset.id;
-    modal.show();
-  });
-
-  // Activar/Desactivar sede
+  // Delegación de eventos: editar y toggle de activación
   document.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('.btn-toggle-sede');
-    if (!btn) return;
-    
-    ev.preventDefault(); // Prevenir comportamiento por defecto
-    
-    const id = btn.dataset.id;
-    const accion = btn.dataset.accion;
-    const confirmMsg = accion === 'N' ? '¿Desactivar esta sede?' : '¿Activar esta sede?';
-    
-    if (!confirm(confirmMsg)) return;
+    // Editar sede
+    const btnEdit = ev.target.closest('.btn-editar-sede');
+    if (btnEdit) {
+      form.nombre.value = btnEdit.dataset.nombre || '';
+      form.ciudad.value = btnEdit.dataset.ciudad || '';
+      form.slot_minutos.value = btnEdit.dataset.slot || 120;
+      form.max_guardias.value = btnEdit.dataset.max || 10;
+      form.dataset.editId = btnEdit.dataset.id;
+      modal.show();
+      return;
+    }
 
-    try {
-      await api(`/api/sedes/${id}/editar/`, { 
-        method: 'POST', 
-        body: JSON.stringify({ activo: accion }) 
-      });
-      location.reload();
-    } catch (err) {
-      alert('Error: ' + err.message);
+    // Activar/Desactivar sede
+    // Eliminar sede (con preview modal)
+    const btnDel = ev.target.closest('.btn-eliminar-sede');
+    if (btnDel) {
+      const id = btnDel.dataset.id;
+      try {
+        const info = await api(`/api/sedes/${encodeURIComponent(id)}/eliminar/info/`);
+        document.getElementById('del-sede-id').textContent = id;
+        document.getElementById('del-sede-guardias').textContent = info.guardias ?? '-';
+        document.getElementById('del-sede-turnos').textContent = info.turnos ?? '-';
+        const alertBox = document.getElementById('del-sede-alert');
+        if ((info.guardias||0) > 0 || (info.turnos||0) > 0) alertBox.classList.remove('d-none'); else alertBox.classList.add('d-none');
+        modalDelEl.dataset.id = id;
+        document.getElementById('del-sede-msg').textContent = '';
+        modalDel.show();
+      } catch (e) {
+        if (!confirm('No se pudo obtener el detalle. ¿Desea intentar eliminar igualmente?')) return;
+        try {
+          await api(`/api/sedes/${encodeURIComponent(id)}/eliminar/`, { method: 'POST' });
+          location.reload();
+        } catch (err) { alert('No fue posible eliminar la sede: ' + (err.message || err)); }
+      }
+      return;
+    }
+
+    const btnToggle = ev.target.closest('.btn-toggle-sede');
+    if (btnToggle) {
+      const id = btnToggle.dataset.id;
+      const accion = btnToggle.dataset.accion;
+      const confirmMsg = accion === 'N' ? '¿Desactivar esta sede?' : '¿Activar esta sede?';
+      
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        await api(`/api/sedes/${id}/editar/`, { 
+          method: 'POST', 
+          body: JSON.stringify({ activo: accion }) 
+        });
+        location.reload();
+      } catch (err) {
+        alert('Error al cambiar estado de la sede: ' + (err.message || err));
+      }
+      return;
     }
   });
   form.addEventListener('submit', async (ev) => {
@@ -159,6 +212,21 @@ document.addEventListener('DOMContentLoaded', function(){
       msg.textContent = e.message || e; msg.className = 'text-danger';
     }
   });
+});
+
+// Confirmar eliminación desde el modal
+document.getElementById('btn-confirm-eliminar-sede').addEventListener('click', async () => {
+  const modalDelEl = document.getElementById('modalEliminarSede');
+  const id = modalDelEl.dataset.id;
+  const msgDel = document.getElementById('del-sede-msg');
+  msgDel.textContent = '';
+  try {
+    await api(`/api/sedes/${encodeURIComponent(id)}/eliminar/`, { method: 'POST' });
+    msgDel.textContent = 'Sede eliminada.'; msgDel.className='small text-success';
+    setTimeout(()=> location.reload(), 500);
+  } catch (e) {
+    msgDel.textContent = e.message || e; msgDel.className='small text-danger';
+  }
 });
 </script>
 {% endblock %}

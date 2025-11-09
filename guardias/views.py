@@ -157,6 +157,28 @@ def sede_crear(request):
                 sede_id = int(out_id.getvalue())
         return JsonResponse({'status': 'ok', 'sede_id': sede_id})
 
+@csrf_exempt
+@require_http_methods(["POST"])
+def sede_eliminar(request, sede_id):
+    """
+    Elimina una sede por ID. Respuestas:
+      - 200: eliminado
+      - 404: no existe
+      - 409: conflicto por integridad referencial (FK hijas)
+      - 500: otro error
+    """
+    try:
+        with connection.cursor() as cur:
+            cur.execute("DELETE FROM sedes WHERE sede_id = :sede", {'sede': sede_id})
+            if cur.rowcount == 0:
+                return JsonResponse({'error': 'Sede no encontrada'}, status=404)
+        return JsonResponse({'status': 'ok', 'sede_id': sede_id})
+    except Exception as e:
+        msg = str(e)
+        # ORA-02292: integrity constraint violated - child record found
+        if 'ORA-02292' in msg or 'integrity constraint' in msg.lower():
+            return JsonResponse({'error': 'No se puede eliminar la sede porque tiene registros relacionados (guardias/turnos).'}, status=409)
+        return JsonResponse({'error': msg}, status=500)
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -332,6 +354,79 @@ def guardia_reactivar(request):
 
 
 # ======================
+# ELIMINACIÓN: GUARDIA, ROTACIÓN, PREVIEWS
+# ======================
+@csrf_exempt
+@require_http_methods(["POST"])
+def guardia_eliminar(request, guardia_id):
+    """
+    Elimina una guardia por ID. Retorna 200 si elimina, 404 si no existe,
+    409 si hay turnos relacionados.
+    """
+    try:
+        with connection.cursor() as cur:
+            cur.execute("DELETE FROM guardias WHERE guardia_id = :id", {'id': guardia_id})
+            if cur.rowcount == 0:
+                return JsonResponse({'error': 'Guardia no encontrada'}, status=404)
+        return JsonResponse({'status': 'ok', 'guardia_id': guardia_id})
+    except Exception as e:
+        msg = str(e)
+        if 'ORA-02292' in msg or 'integrity constraint' in msg.lower():
+            return JsonResponse({'error': 'No se puede eliminar: existen turnos asociados a esta guardia.'}, status=409)
+        return JsonResponse({'error': msg}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def rotacion_eliminar(request, sede_id, ciclo):
+    """
+    Elimina todos los turnos de una rotación (ciclo) para una sede dada.
+    ciclo puede venir como 'YYYY-MM-DD_HH:MI' o 'YYYY-MM-DDTHH:MI'.
+    """
+    ciclo_dt = ciclo.replace('_', ' ').replace('T', ' ')
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM turnos
+                WHERE sede_id = :sede
+                  AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                """,
+                {'sede': sede_id, 'ciclo': ciclo_dt}
+            )
+            borrados = cur.rowcount or 0
+        return JsonResponse({'status': 'ok', 'eliminados': int(borrados), 'sede_id': sede_id, 'ciclo': ciclo_dt})
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def sede_eliminar_info(request, sede_id):
+    """Devuelve contadores de dependencias que impedirían borrar una sede."""
+    try:
+        with connection.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM guardias WHERE sede_id = :s", {'s': sede_id})
+            guardias_count = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM turnos WHERE sede_id = :s", {'s': sede_id})
+            turnos_count = cur.fetchone()[0]
+        return JsonResponse({'sede_id': sede_id, 'guardias': int(guardias_count), 'turnos': int(turnos_count)})
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def guardia_eliminar_info(request, guardia_id):
+    """Devuelve contadores de dependencias para una guardia (turnos)."""
+    try:
+        with connection.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM turnos WHERE guardia_id = :g", {'g': guardia_id})
+            turnos_count = cur.fetchone()[0]
+        return JsonResponse({'guardia_id': guardia_id, 'turnos': int(turnos_count)})
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# ======================
 # JORNADAS
 # ======================
 @require_http_methods(["GET"])
@@ -350,9 +445,44 @@ def jornadas_list(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 def cargar_jornadas_defecto(request):
+    """
+    Intenta cargar jornadas por defecto usando el paquete PL/SQL.
+    Si falla (por nombre/firma del procedimiento), aplica un fallback
+    que inserta las 3 jornadas base si la tabla está vacía.
+    """
+    try:
         with connection.cursor() as cur:
+            # Intento 1: llamar al procedimiento del paquete (con y sin paréntesis)
+            try:
+                cur.execute("BEGIN pkg_guardias.cargar_jornadas_defecto(); END;")
+                return JsonResponse({'status': 'ok', 'message': 'Jornadas cargadas vía paquete PL/SQL'})
+            except Exception:
+                # Segundo intento sin paréntesis (por si la firma es PROCEDURE sin parámetros explícitos)
                 cur.execute("BEGIN pkg_guardias.cargar_jornadas_defecto; END;")
-        return JsonResponse({'status': 'ok', 'message': 'Jornadas cargadas (si estaban vacías)'})
+                return JsonResponse({'status': 'ok', 'message': 'Jornadas cargadas vía paquete PL/SQL'})
+    except Exception as pkg_err:
+        # Fallback: insertar jornadas si la tabla está vacía
+        try:
+            plsql = """
+            DECLARE
+              v_count NUMBER;
+            BEGIN
+              SELECT COUNT(*) INTO v_count FROM jornadas;
+              IF v_count = 0 THEN
+                INSERT INTO jornadas (nombre, hora_ini_ref, hora_fin_ref)
+                VALUES ('Mañana', NUMTODSINTERVAL(8,'HOUR'), NUMTODSINTERVAL(16,'HOUR'));
+                INSERT INTO jornadas (nombre, hora_ini_ref, hora_fin_ref)
+                VALUES ('Tarde',  NUMTODSINTERVAL(16,'HOUR'), NUMTODSINTERVAL(24,'HOUR'));
+                INSERT INTO jornadas (nombre, hora_ini_ref, hora_fin_ref)
+                VALUES ('Noche',  NUMTODSINTERVAL(0,'HOUR'),  NUMTODSINTERVAL(8,'HOUR'));
+              END IF;
+            END;
+            """
+            with connection.cursor() as cur:
+                cur.execute(plsql)
+            return JsonResponse({'status': 'ok', 'message': 'Jornadas cargadas por fallback (tabla estaba vacía)'})
+        except Exception as fb_err:
+            return JsonResponse({'error': f'No fue posible cargar jornadas por defecto. Paquete error: {pkg_err}; Fallback error: {fb_err}'}, status=500)
 
 
 # ======================

@@ -15,9 +15,9 @@ def home(request):
 def sedes(request):
     # Lista simple de sedes para mostrar en la UI
     with connection.cursor() as cur:
-        cur.execute("SELECT sede_id, nombre, ciudad, slot_minutos, max_guardias FROM sedes ORDER BY nombre, ciudad")
+        cur.execute("SELECT sede_id, nombre, ciudad, slot_minutos, max_guardias, activo FROM sedes ORDER BY nombre, ciudad")
         rows = cur.fetchall()
-    sedes = [{'sede_id': r[0], 'nombre': r[1], 'ciudad': r[2], 'slot_minutos': r[3], 'max_guardias': r[4]} for r in rows]
+    sedes = [{'sede_id': r[0], 'nombre': r[1], 'ciudad': r[2], 'slot_minutos': r[3], 'max_guardias': r[4], 'activo': r[5]} for r in rows]
     return render(request, 'sedes.html', {'sedes': sedes})
 
 

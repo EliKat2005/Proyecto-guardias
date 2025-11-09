@@ -114,6 +114,7 @@ document.addEventListener('DOMContentLoaded', function(){
                     data-orden="${g.orden_rotativo}"
                     data-sede="${g.sede_id}">Editar</button>
             <button class="btn btn-sm btn-outline-danger btn-baja" data-id="${g.guardia_id}">Dar baja</button>
+            <button class="btn btn-sm btn-outline-danger btn-eliminar-guardia" data-id="${g.guardia_id}">Eliminar</button>
           </td>
         </tr>
       `).join('');
@@ -154,14 +155,78 @@ document.addEventListener('DOMContentLoaded', function(){
 
   // Delegación para acciones (baja / editar)
   document.addEventListener('click', async (ev) => {
+    const btnDel = ev.target.closest('.btn-eliminar-guardia');
+    if (btnDel) {
+      const id = btnDel.dataset.id;
+      try {
+        const info = await api(`/api/guardias/${encodeURIComponent(id)}/eliminar/info/`);
+        // construir modal simple on the fly
+        const html = `
+          <div class="modal fade" id="modalEliminarGuardia" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog"><div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">Eliminar guardia ${id}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+              </div>
+              <div class="modal-body">
+                <p>Turnos asociados: <b>${info.turnos ?? '-'}</b></p>
+                <div class="alert alert-warning ${((info.turnos||0)>0)?'':'d-none'}">Existen turnos asociados. La eliminación fallará por integridad referencial si no se eliminan primero.</div>
+                <div id="del-guardia-msg" class="small"></div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-danger" id="btn-confirm-eliminar-guardia">Eliminar</button>
+              </div>
+            </div></div>
+          </div>`;
+        let container = document.getElementById('modalEliminarGuardia');
+        if (container) container.remove();
+        document.body.insertAdjacentHTML('beforeend', html);
+        const modalEl = document.getElementById('modalEliminarGuardia');
+        const modal = new bootstrap.Modal(modalEl);
+        modal.show();
+        modalEl.addEventListener('click', async (e2) => {
+          if (e2.target && e2.target.id === 'btn-confirm-eliminar-guardia') {
+            const msgDel = document.getElementById('del-guardia-msg');
+            msgDel.textContent = '';
+            try {
+              await api(`/api/guardias/${encodeURIComponent(id)}/eliminar/`, { method: 'POST' });
+              msgDel.textContent = 'Guardia eliminada.'; msgDel.className='small text-success';
+              setTimeout(()=> { modal.hide(); cargarGuardias(); }, 500);
+            } catch (err) {
+              msgDel.textContent = err.message || err; msgDel.className='small text-danger';
+            }
+          }
+        }, { once: true });
+      } catch (e) {
+        if (!confirm('No se pudo obtener el detalle. ¿Desea intentar eliminar igualmente?')) return;
+        try {
+          await api(`/api/guardias/${encodeURIComponent(id)}/eliminar/`, { method: 'POST' });
+          cargarGuardias();
+        } catch (err) { alert('No fue posible eliminar la guardia: ' + (err.message || err)); }
+      }
+      return;
+    }
+
     const btnBaja = ev.target.closest('.btn-baja');
     if (btnBaja) {
       const id = btnBaja.dataset.id;
-      if (!confirm(`Dar baja a la guardia ${id}?`)) return;
+      if (!confirm(`¿Dar baja a la guardia ${id}?`)) return;
+      
+      // Opcional: preguntar por ciclo desde el cual dar baja
+      const desdeCiclo = prompt('Desde ciclo (opcional, formato YYYY-MM-DD HH:MM):', '');
+      const payload = { guardia_id: Number(id) };
+      if (desdeCiclo && desdeCiclo.trim()) {
+        payload.desde_ciclo = desdeCiclo.trim();
+      }
+      
       try {
-        await api('/api/guardias/baja/', { method: 'POST', body: JSON.stringify({ guardia_id: Number(id) }) });
+        await api('/api/guardias/baja/', { method: 'POST', body: JSON.stringify(payload) });
+        alert('Guardia dada de baja exitosamente.');
         cargarGuardias();
-      } catch (e) { alert(e.message || e); }
+      } catch (e) { 
+        alert('Error al dar de baja: ' + (e.message || e)); 
+      }
       return;
     }
 

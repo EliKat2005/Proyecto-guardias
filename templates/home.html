@@ -36,6 +36,27 @@
             <div id="gen-msg" class="mt-2 small text-center"></div>
           </div>
         </form>
+        <hr/>
+        <form id="form-del-rot" class="row g-3 mt-2">
+          <div class="col-12">
+            <label class="form-label">Eliminar rotación (sede + ciclo)</label>
+          </div>
+          <div class="col-md-6">
+            <select class="form-select" id="del_rot_sede" required>
+              <option value="">-- Sede --</option>
+              {% for s in sedes %}
+                <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <input type="datetime-local" class="form-control" id="del_rot_ciclo" required>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-outline-danger w-100" type="submit"><i class="bi bi-x-circle me-2"></i>Eliminar rotación</button>
+            <div id="del-rot-msg" class="small mt-1"></div>
+          </div>
+        </form>
       </div>
     </div>
   </div>
@@ -93,11 +114,33 @@
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-clock-history me-2"></i>Eventos Recientes del Sistema</span>
     <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-eventos">
-      <i class="bi bi-arrow-clockwise"></i>
+      <i class="bi bi-arrow-clockwise"></i> Refrescar
     </button>
   </div>
   <div class="card-body">
-    <pre id="eventos" class="mono small bg-light p-3 border rounded" style="max-height: 260px; overflow:auto;">Cargando…</pre>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle" id="eventos-table">
+        <thead>
+          <tr>
+            <th style="width: 20%">Fecha</th>
+            <th style="width: 14%">Tipo</th>
+            <th style="width: 8%">Sede</th>
+            <th style="width: 10%">Guardia</th>
+            <th style="width: 8%">Turno</th>
+            <th>Detalle</th>
+          </tr>
+        </thead>
+        <tbody id="eventos-tbody">
+          <tr><td colspan="6" class="text-muted">Cargando eventos...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="d-flex justify-content-between mt-2 small">
+      <div id="eventos-msg" class="text-muted">&nbsp;</div>
+      <div>
+        <span id="eventos-count" class="badge text-bg-secondary">0</span> eventos
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -108,20 +151,80 @@ document.addEventListener('DOMContentLoaded', function () {
   // Elementos cacheados
   const tbody = document.getElementById('turnos-tbody');
   const turnosBox = document.getElementById('turnos-box');
-  const eventosPre = document.getElementById('eventos');
+  const eventosTbody = document.getElementById('eventos-tbody');
+  const eventosCount = document.getElementById('eventos-count');
+  const eventosMsg = document.getElementById('eventos-msg');
   const sedeSelect = document.getElementById('sede_id');
   const hintMax = document.getElementById('max_guardias_hint');
   const hintSlot = document.getElementById('slot_minutos_hint');
   const qsede = document.getElementById('qsede');
   const btnRefreshEventos = document.getElementById('btn-refresh-eventos');
 
+  // Helper para badges de tipo de evento
+  function badgeTipo(tipo) {
+    if (!tipo) return '<span class="badge text-bg-secondary">-</span>';
+    const t = String(tipo).toUpperCase();
+    const cls = t.includes('ERROR') ? 'danger' : t.includes('WARN') ? 'warning' : t.includes('INFO') ? 'primary' : 'secondary';
+    return `<span class="badge text-bg-${cls}">${tipo}</span>`;
+  }
+
+  function getRowClass(tipo) {
+    if (!tipo) return '';
+    const t = String(tipo).toUpperCase();
+    if (t.includes('ERROR')) return 'table-row-error';
+    if (t.includes('WARN')) return 'table-row-warning';
+    return '';
+  }
+
+  // Renderizar eventos como tabla
+  function renderEventos(list) {
+    if (!list?.length) {
+      eventosTbody.innerHTML = '<tr><td colspan="6" class="text-muted">Sin eventos recientes.</td></tr>';
+      eventosCount.textContent = '0';
+      return;
+    }
+    
+    // Limitar a los últimos 15 eventos en home
+    const subset = list.slice(0, 15);
+    
+    const rows = subset.map(ev => {
+      const detalle = ev.detalle ? String(ev.detalle) : '';
+      const detalleShort = detalle.length > 80 ? (detalle.slice(0, 80) + '…') : detalle;
+      const sede = ev.sede_id ?? '-';
+      const guardia = ev.guardia_id ?? '-';
+      const turno = ev.turno_id ?? '-';
+      const rowClass = getRowClass(ev.tipo_evento);
+      
+      return `
+        <tr class="${rowClass}">
+          <td><i class="bi bi-calendar-week me-1 text-muted"></i>${ev.fecha_evento || '-'}</td>
+          <td>${badgeTipo(ev.tipo_evento)}</td>
+          <td>${sede !== '-' ? `<span class="badge rounded-pill text-bg-light">${sede}</span>` : '-'}</td>
+          <td>${guardia !== '-' ? `<span class="badge rounded-pill text-bg-light">${guardia}</span>` : '-'}</td>
+          <td>${turno !== '-' ? `<span class="badge rounded-pill text-bg-light">${turno}</span>` : '-'}</td>
+          <td class="text-truncate" style="max-width: 380px;" title="${detalle.replace(/"/g,'&quot;')}">
+            ${detalleShort.replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+          </td>
+        </tr>
+      `;
+    }).join('');
+    eventosTbody.innerHTML = rows;
+    eventosCount.textContent = String(list.length);
+  }
+
   // Cargar y mostrar eventos recientes
   async function cargarEventos() {
+    eventosMsg.textContent = 'Cargando...';
     try {
       const data = await api('/api/reportes/eventos/');
-      eventosPre.textContent = JSON.stringify(data, null, 2);
+      const eventos = data.eventos || [];
+      renderEventos(eventos);
+      eventosMsg.textContent = eventos.length ? `Mostrando últimos ${Math.min(eventos.length, 15)} evento(s)` : 'Sin eventos';
+      eventosMsg.className = 'text-muted';
     } catch (e) {
-      eventosPre.textContent = e.message || String(e);
+      eventosTbody.innerHTML = `<tr><td colspan="6" class="text-danger">${e.message || String(e)}</td></tr>`;
+      eventosMsg.textContent = 'Error al cargar eventos';
+      eventosMsg.className = 'text-danger';
     }
   }
   cargarEventos();
@@ -152,6 +255,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Generar rotación
   const formGen = document.getElementById('form-gen');
+  const formDelRot = document.getElementById('form-del-rot');
   if (formGen) {
     formGen.addEventListener('submit', async (ev) => {
       ev.preventDefault();
@@ -180,6 +284,27 @@ document.addEventListener('DOMContentLoaded', function () {
       } catch (e) {
         msg.textContent = '✗ ' + (e.message || e);
         msg.className = 'text-danger';
+      }
+    });
+  }
+
+  // Eliminar rotación
+  if (formDelRot) {
+    formDelRot.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const sede_id = document.getElementById('del_rot_sede').value;
+      const cicloRaw = document.getElementById('del_rot_ciclo').value;
+      const msg = document.getElementById('del-rot-msg');
+      msg.textContent=''; msg.className='';
+      if (!sede_id || !cicloRaw) { msg.textContent='Complete sede y ciclo'; msg.className='text-danger'; return; }
+      const cicloEnc = encodeURIComponent(cicloRaw);
+      if (!confirm('¿Eliminar todos los turnos de esa rotación?')) return;
+      try {
+        const res = await api(`/api/rotacion/eliminar/${encodeURIComponent(sede_id)}/${cicloEnc}/`, { method: 'POST' });
+        msg.textContent = `Eliminados ${res.eliminados||0} turno(s).`; msg.className='text-success';
+        cargarEventos();
+      } catch (e) {
+        msg.textContent = e.message || e; msg.className='text-danger';
       }
     });
   }
