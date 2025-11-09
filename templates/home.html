@@ -5,13 +5,14 @@
 <div class="row g-4 align-items-stretch">
   <div class="col-lg-5">
     <div class="card h-100 card-gradient">
-      <div class="card-header fw-bold">Generar rotación (24h)</div>
+      <div class="card-header fw-bold"><i class="bi bi-arrow-repeat me-2"></i>Generar rotación (24h)</div>
       <div class="card-body">
         <form id="form-gen" class="row g-3">
           {% csrf_token %}
           <div class="col-12">
             <label class="form-label">Sede</label>
             <select class="form-select" id="sede_id" required>
+              <option value="">-- Seleccione una sede --</option>
               {% for s in sedes %}
                 <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
               {% endfor %}
@@ -19,17 +20,20 @@
             <div class="form-text">Máximo guardias: <b id="max_guardias_hint">—</b> • Slot: <b id="slot_minutos_hint">—</b> min</div>
           </div>
           <div class="col-md-6">
-            <label class="form-label">Ciclo (YYYY-MM-DD HH:MM)</label>
+            <label class="form-label">Ciclo (inicio del ciclo 24h)</label>
             <input type="datetime-local" class="form-control" id="ciclo" required>
-            <div class="form-text">Inicio y ancla del ciclo de 24h</div>
+            <div class="form-text">Ancla del ciclo de 24 horas</div>
           </div>
           <div class="col-md-6">
-            <label class="form-label">Inicio (YYYY-MM-DD HH:MM)</label>
-            <input type="datetime-local" class="form-control" id="inicio" placeholder="2025-11-10T07:00" required>
+            <label class="form-label">Inicio (hora de arranque)</label>
+            <input type="datetime-local" class="form-control" id="inicio" required>
+            <div class="form-text">Normalmente igual que ciclo</div>
           </div>
           <div class="col-12">
-            <button class="btn btn-primary" type="submit">Generar rotación</button>
-            <span id="gen-msg" class="ms-2"></span>
+            <button class="btn btn-primary w-100" type="submit">
+              <i class="bi bi-play-circle me-2"></i>Generar rotación
+            </button>
+            <div id="gen-msg" class="mt-2 small text-center"></div>
           </div>
         </form>
       </div>
@@ -38,31 +42,34 @@
 
   <div class="col-lg-7">
     <div class="card h-100">
-      <div class="card-header fw-bold">Consultar turnos de un ciclo</div>
+      <div class="card-header fw-bold"><i class="bi bi-list-check me-2"></i>Consultar turnos de un ciclo</div>
       <div class="card-body">
         <form id="form-q" class="row g-3">
           {% csrf_token %}
           <div class="col-md-6">
             <label class="form-label">Sede</label>
             <select class="form-select" id="qsede" required>
+              <option value="">-- Seleccione una sede --</option>
               {% for s in sedes %}
                 <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
               {% endfor %}
             </select>
           </div>
           <div class="col-md-6">
-            <label class="form-label">Ciclo (YYYY-MM-DD HH:MM)</label>
+            <label class="form-label">Ciclo (fecha/hora del ciclo)</label>
             <input type="datetime-local" class="form-control" id="qciclo" required>
           </div>
           <div class="col-12">
-            <button class="btn btn-secondary" type="submit">Listar turnos</button>
+            <button class="btn btn-secondary w-100" type="submit">
+              <i class="bi bi-search me-2"></i>Listar turnos
+            </button>
           </div>
         </form>
         <hr/>
         <div id="turnos-box" class="d-none">
           <div class="d-flex justify-content-between align-items-center mb-2">
             <h5 class="mb-0">Turnos del ciclo</h5>
-            <small class="text-muted">Los ajustes por eliminación se aplican automáticamente en cascada</small>
+            <small class="text-muted">Al eliminar, se ajustan turnos vecinos automáticamente</small>
           </div>
           <div class="table-responsive">
             <table class="table table-sm table-striped align-middle">
@@ -83,7 +90,12 @@
 <hr class="my-4"/>
 
 <div class="card">
-  <div class="card-header fw-bold">Eventos recientes</div>
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-clock-history me-2"></i>Eventos Recientes del Sistema</span>
+    <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-eventos">
+      <i class="bi bi-arrow-clockwise"></i>
+    </button>
+  </div>
   <div class="card-body">
     <pre id="eventos" class="mono small bg-light p-3 border rounded" style="max-height: 260px; overflow:auto;">Cargando…</pre>
   </div>
@@ -101,6 +113,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const hintMax = document.getElementById('max_guardias_hint');
   const hintSlot = document.getElementById('slot_minutos_hint');
   const qsede = document.getElementById('qsede');
+  const btnRefreshEventos = document.getElementById('btn-refresh-eventos');
 
   // Cargar y mostrar eventos recientes
   async function cargarEventos() {
@@ -112,6 +125,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
   cargarEventos();
+  if (btnRefreshEventos) btnRefreshEventos.addEventListener('click', cargarEventos);
 
   // Mostrar metadatos de la sede seleccionada (si la API lo soporta)
   async function updateSedeHints(id) {

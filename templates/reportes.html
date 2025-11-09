@@ -2,11 +2,221 @@
 {% block title %}Reportes - Agencia de Guardias{% endblock %}
 
 {% block content %}
-<h3>Reportes</h3>
-<p class="text-muted">Panel de reportes. Puedes descargar reportes de horas en CSV o consultar via API.</p>
-<ul>
-  <li><strong>Eventos recientes (JSON):</strong> <code>/api/reportes/eventos/</code></li>
-  <li><strong>Horas (JSON):</strong> <code>/api/reportes/horas/?desde=YYYY-MM-DD&hasta=YYYY-MM-DD</code></li>
-  <li><strong>Horas (CSV):</strong> <code>/api/reportes/horas.csv?desde=YYYY-MM-DD&hasta=YYYY-MM-DD</code></li>
-</ul>
+<h3>Reportes y Análisis</h3>
+
+<!-- Panel 1: Eventos Recientes -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-clock-history me-2"></i>Eventos Recientes del Sistema</span>
+    <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-eventos">
+      <i class="bi bi-arrow-clockwise me-1"></i>Refrescar
+    </button>
+  </div>
+  <div class="card-body">
+    <pre id="eventos-pre" class="mono small bg-light p-3 border rounded" style="max-height: 300px; overflow:auto;">Cargando eventos...</pre>
+  </div>
+</div>
+
+<!-- Panel 2: Consulta de Horas Trabajadas (agregado) -->
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-bar-chart me-2"></i>Horas Trabajadas por Guardia (Agregado)</div>
+  <div class="card-body">
+    <form id="form-horas" class="row g-3 mb-3">
+      <div class="col-md-3">
+        <label class="form-label">Desde (YYYY-MM-DD)</label>
+        <input type="date" name="desde" class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Hasta (YYYY-MM-DD)</label>
+        <input type="date" name="hasta" class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Sede (opcional)</label>
+        <select name="sede_id" class="form-select">
+          <option value="">-- Todas --</option>
+        </select>
+      </div>
+      <div class="col-md-3 d-flex align-items-end gap-2">
+        <button type="submit" class="btn btn-primary">Consultar</button>
+        <button type="button" class="btn btn-success" id="btn-csv">Descargar CSV</button>
+      </div>
+    </form>
+    <div id="horas-msg" class="small mb-2"></div>
+    <div id="horas-result" class="d-none">
+      <div class="table-responsive">
+        <table class="table table-sm table-striped">
+          <thead>
+            <tr><th>Guardia ID</th><th>Guardia</th><th>Sede</th><th>Fecha</th><th>Horas</th></tr>
+          </thead>
+          <tbody id="horas-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 3: Horas Diarias (vista vw_horas_por_guardia_dia) -->
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-calendar-day me-2"></i>Horas Trabajadas por Día (Desglose Diario)</div>
+  <div class="card-body">
+    <form id="form-diarias" class="row g-3 mb-3">
+      <div class="col-md-3">
+        <label class="form-label">Desde (opcional)</label>
+        <input type="date" name="desde" class="form-control">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Hasta (opcional)</label>
+        <input type="date" name="hasta" class="form-control">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Sede (texto)</label>
+        <input type="text" name="sede" class="form-control" placeholder="Nombre de sede">
+      </div>
+      <div class="col-md-3 d-flex align-items-end">
+        <button type="submit" class="btn btn-secondary">Consultar</button>
+      </div>
+    </form>
+    <div id="diarias-msg" class="small mb-2"></div>
+    <div id="diarias-result" class="d-none">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover">
+          <thead>
+            <tr><th>Guardia ID</th><th>Apellidos, Nombres</th><th>Sede</th><th>Fecha</th><th>Horas</th></tr>
+          </thead>
+          <tbody id="diarias-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const eventosPre = document.getElementById('eventos-pre');
+  const btnRefreshEventos = document.getElementById('btn-refresh-eventos');
+  
+  const formHoras = document.getElementById('form-horas');
+  const horasMsg = document.getElementById('horas-msg');
+  const horasResult = document.getElementById('horas-result');
+  const horasTbody = document.getElementById('horas-tbody');
+  const btnCsv = document.getElementById('btn-csv');
+  const sedeSelect = formHoras.querySelector('[name="sede_id"]');
+
+  const formDiarias = document.getElementById('form-diarias');
+  const diariasMsg = document.getElementById('diarias-msg');
+  const diariasResult = document.getElementById('diarias-result');
+  const diariasTbody = document.getElementById('diarias-tbody');
+
+  // Cargar eventos recientes
+  async function cargarEventos() {
+    try {
+      const data = await api('/api/reportes/eventos/');
+      eventosPre.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      eventosPre.textContent = 'Error: ' + (e.message || e);
+    }
+  }
+  cargarEventos();
+  btnRefreshEventos.addEventListener('click', cargarEventos);
+
+  // Cargar sedes para el select
+  async function cargarSedes() {
+    try {
+      const res = await api('/api/sedes/');
+      const list = res.sedes || [];
+      sedeSelect.innerHTML = '<option value="">-- Todas --</option>' + 
+        list.map(s => `<option value="${s.sede_id}">${s.nombre} (${s.ciudad})</option>`).join('');
+    } catch (e) {
+      sedeSelect.innerHTML = '<option value="">Error cargando sedes</option>';
+    }
+  }
+  cargarSedes();
+
+  // Consultar horas agregadas
+  formHoras.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    horasMsg.textContent = '';
+    horasResult.classList.add('d-none');
+    const fd = new FormData(formHoras);
+    const params = new URLSearchParams();
+    params.set('desde', fd.get('desde'));
+    params.set('hasta', fd.get('hasta'));
+    if (fd.get('sede_id')) params.set('sede_id', fd.get('sede_id'));
+    
+    try {
+      const res = await api('/api/reportes/horas/?' + params.toString());
+      const rows = res.rows || [];
+      if (!rows.length) {
+        horasMsg.textContent = 'No hay datos para el rango seleccionado.';
+        horasMsg.className = 'text-muted small';
+        return;
+      }
+      horasTbody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.guardia_id}</td>
+          <td>${r.guardia}</td>
+          <td>${r.sede}</td>
+          <td>${r.fecha}</td>
+          <td>${r.horas !== null ? r.horas.toFixed(2) : '-'}</td>
+        </tr>
+      `).join('');
+      horasResult.classList.remove('d-none');
+      horasMsg.textContent = `${rows.length} registros encontrados.`;
+      horasMsg.className = 'text-success small';
+    } catch (e) {
+      horasMsg.textContent = e.message || e;
+      horasMsg.className = 'text-danger small';
+    }
+  });
+
+  // Descargar CSV
+  btnCsv.addEventListener('click', () => {
+    const fd = new FormData(formHoras);
+    const params = new URLSearchParams();
+    params.set('desde', fd.get('desde'));
+    params.set('hasta', fd.get('hasta'));
+    if (fd.get('sede_id')) params.set('sede_id', fd.get('sede_id'));
+    window.open('/api/reportes/horas.csv?' + params.toString(), '_blank');
+  });
+
+  // Consultar horas diarias
+  formDiarias.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    diariasMsg.textContent = '';
+    diariasResult.classList.add('d-none');
+    const fd = new FormData(formDiarias);
+    const params = new URLSearchParams();
+    if (fd.get('desde')) params.set('desde', fd.get('desde'));
+    if (fd.get('hasta')) params.set('hasta', fd.get('hasta'));
+    if (fd.get('sede')) params.set('sede', fd.get('sede'));
+
+    try {
+      const res = await api('/api/reportes/horas-diarias/?' + params.toString());
+      const rows = res.rows || [];
+      if (!rows.length) {
+        diariasMsg.textContent = 'No hay datos.';
+        diariasMsg.className = 'text-muted small';
+        return;
+      }
+      diariasTbody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.guardia_id}</td>
+          <td>${r.apellidos}, ${r.nombres}</td>
+          <td>${r.sede}</td>
+          <td>${r.fecha}</td>
+          <td>${r.horas !== null ? r.horas.toFixed(2) : '-'}</td>
+        </tr>
+      `).join('');
+      diariasResult.classList.remove('d-none');
+      diariasMsg.textContent = `${rows.length} registros encontrados.`;
+      diariasMsg.className = 'text-success small';
+    } catch (e) {
+      diariasMsg.textContent = e.message || e;
+      diariasMsg.className = 'text-danger small';
+    }
+  });
+});
+</script>
 {% endblock %}

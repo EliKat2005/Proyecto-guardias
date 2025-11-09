@@ -61,22 +61,27 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link active" href="{% url 'home' %}">
+                        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="{% url 'home' %}">
                             <i class="bi bi-house me-1"></i>Inicio
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{% url 'guardias' %}">
+                        <a class="nav-link {% if '/guardias/' in request.path %}active{% endif %}" href="{% url 'guardias' %}">
                             <i class="bi bi-people me-1"></i>Guardias
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{% url 'sedes' %}">
+                        <a class="nav-link {% if '/jornadas/' in request.path %}active{% endif %}" href="{% url 'jornadas' %}">
+                            <i class="bi bi-sun me-1"></i>Jornadas
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if '/sedes/' in request.path %}active{% endif %}" href="{% url 'sedes' %}">
                             <i class="bi bi-building me-1"></i>Sedes
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{% url 'reportes' %}">
+                        <a class="nav-link {% if '/reportes/' in request.path %}active{% endif %}" href="{% url 'reportes' %}">
                             <i class="bi bi-clock-history me-1"></i>Reportes
                         </a>
                     </li>
@@ -131,6 +136,30 @@
 
     <!-- API Helper -->
     <script>
+        // Mapeo de errores de Oracle a mensajes amigables
+        const ERROR_MESSAGES = {
+            'ORA-00942': 'La vista o tabla no existe en la base de datos.',
+            'ORA-01861': 'Formato de fecha/hora inválido. Verifique los datos ingresados.',
+            'ORA-02290': 'Restricción de integridad violada. Verifique que los datos cumplen las reglas del negocio.',
+            'ORA-06550': 'Error en el código PL/SQL. Contacte al administrador.',
+            'ORA-20010': 'Se ha superado el número máximo de guardias permitido para esta sede.',
+            'ORA-20020': 'No se puede eliminar directamente. Use el procedimiento correspondiente.',
+            'ORA-20030': 'El turno se solapa con otro turno existente.',
+            'ORA-20110': 'No hay guardias activas disponibles para generar la rotación.',
+            'ORA-20120': 'No se puede eliminar el último turno del ciclo. Debe quedar al menos uno.'
+        };
+
+        // Parsear errores de Oracle y convertir a mensajes amigables
+        function parseOracleError(errorMsg) {
+            if (!errorMsg) return 'Error desconocido';
+            // Buscar código ORA-XXXXX en el mensaje
+            const match = errorMsg.match(/ORA-\d{5}/);
+            if (match && ERROR_MESSAGES[match[0]]) {
+                return ERROR_MESSAGES[match[0]];
+            }
+            return errorMsg; // Si no hay mapeo, devolver mensaje original
+        }
+
         // Función helper para llamadas API
         async function api(url, options = {}) {
             // Construir headers por defecto
@@ -166,7 +195,8 @@
                     // respuesta no JSON
                     error = { error: response.statusText };
                 }
-                throw new Error(error.error || `Error ${response.status}`);
+                const errorMsg = error.error || `Error ${response.status}`;
+                throw new Error(parseOracleError(errorMsg));
             }
 
             // Intentar devolver JSON, si no, devolver texto

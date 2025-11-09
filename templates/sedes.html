@@ -7,7 +7,7 @@
 <div class="table-responsive">
   <table class="table table-sm table-striped align-middle">
     <thead>
-      <tr><th>ID</th><th>Nombre</th><th>Ciudad</th><th>Slot (min)</th><th>Max guardias</th></tr>
+      <tr><th>ID</th><th>Nombre</th><th>Ciudad</th><th>Slot (min)</th><th>Max guardias</th><th>Estado</th><th>Acciones</th></tr>
     </thead>
     <tbody>
       {% for s in sedes %}
@@ -17,6 +17,26 @@
         <td>{{ s.ciudad }}</td>
         <td>{{ s.slot_minutos }}</td>
         <td>{{ s.max_guardias }}</td>
+        <td>
+          {% if s.activo == 'S' %}
+            <span class="badge bg-success">Activa</span>
+          {% else %}
+            <span class="badge bg-secondary">Inactiva</span>
+          {% endif %}
+        </td>
+        <td>
+          <button type="button" class="btn btn-sm btn-outline-primary btn-editar-sede"
+                  data-id="{{ s.sede_id }}"
+                  data-nombre="{{ s.nombre }}"
+                  data-ciudad="{{ s.ciudad }}"
+                  data-slot="{{ s.slot_minutos }}"
+                  data-max="{{ s.max_guardias }}">Editar</button>
+          {% if s.activo == 'S' %}
+            <button type="button" class="btn btn-sm btn-outline-warning btn-toggle-sede" data-id="{{ s.sede_id }}" data-accion="N">Desactivar</button>
+          {% else %}
+            <button type="button" class="btn btn-sm btn-outline-success btn-toggle-sede" data-id="{{ s.sede_id }}" data-accion="S">Activar</button>
+          {% endif %}
+        </td>
       </tr>
       {% empty %}
       <tr><td colspan="5" class="text-muted">No hay sedes.</td></tr>
@@ -24,4 +44,121 @@
     </tbody>
   </table>
 </div>
+<div class="mt-3">
+  <button class="btn btn-sm btn-primary" id="btn-crear-sede">Crear sede</button>
+</div>
+
+<!-- Modal Crear Sede -->
+<div class="modal fade" id="modalSede" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="form-sede">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title">Crear nueva sede</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Nombre</label>
+            <input name="nombre" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Ciudad</label>
+            <input name="ciudad" class="form-control" required>
+          </div>
+          <div class="mb-3 row">
+            <div class="col-6">
+              <label class="form-label">Slot (min)</label>
+              <input name="slot_minutos" type="number" class="form-control" value="120" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Max guardias</label>
+              <input name="max_guardias" type="number" class="form-control" value="10" required>
+            </div>
+          </div>
+          <div id="sede-msg" class="small"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Crear</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const modalEl = document.getElementById('modalSede');
+  const modal = new bootstrap.Modal(modalEl);
+  document.getElementById('btn-crear-sede').addEventListener('click', () => { modal.show(); });
+
+  const form = document.getElementById('form-sede');
+  const msg = document.getElementById('sede-msg');
+  const crearBtn = document.getElementById('btn-crear-sede');
+
+  // Cuando se hace clic en editar, rellenar el formulario y cambiar acción
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.btn-editar-sede');
+    if (!btn) return;
+    // rellenar
+    form.nombre.value = btn.dataset.nombre || '';
+    form.ciudad.value = btn.dataset.ciudad || '';
+    form.slot_minutos.value = btn.dataset.slot || 120;
+    form.max_guardias.value = btn.dataset.max || 10;
+    form.dataset.editId = btn.dataset.id;
+    modal.show();
+  });
+
+  // Activar/Desactivar sede
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.btn-toggle-sede');
+    if (!btn) return;
+    
+    ev.preventDefault(); // Prevenir comportamiento por defecto
+    
+    const id = btn.dataset.id;
+    const accion = btn.dataset.accion;
+    const confirmMsg = accion === 'N' ? '¿Desactivar esta sede?' : '¿Activar esta sede?';
+    
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await api(`/api/sedes/${id}/editar/`, { 
+        method: 'POST', 
+        body: JSON.stringify({ activo: accion }) 
+      });
+      location.reload();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  });
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    msg.textContent = '';
+    const fd = new FormData(form);
+    const payload = {
+      nombre: fd.get('nombre'),
+      ciudad: fd.get('ciudad'),
+      slot_minutos: Number(fd.get('slot_minutos')),
+      max_guardias: Number(fd.get('max_guardias'))
+    };
+    try {
+      if (form.dataset.editId) {
+        // editar
+        const id = form.dataset.editId;
+        await api(`/api/sedes/${encodeURIComponent(id)}/editar/`, { method: 'POST', body: JSON.stringify(payload) });
+        msg.textContent = 'Sede actualizada.'; msg.className = 'text-success';
+      } else {
+        await api('/api/sedes/crear/', { method: 'POST', body: JSON.stringify(payload) });
+        msg.textContent = 'Sede creada correctamente.'; msg.className = 'text-success';
+      }
+      setTimeout(()=> location.reload(), 600);
+    } catch (e) {
+      msg.textContent = e.message || e; msg.className = 'text-danger';
+    }
+  });
+});
+</script>
 {% endblock %}

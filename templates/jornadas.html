@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Jornadas - Agencia de Guardias{% endblock %}
+
+{% block content %}
+<h3>Gestión de Jornadas</h3>
+<p class="text-muted">Catálogo de jornadas tipo (Mañana, Tarde, Noche). Usado para clasificar turnos según hora de inicio.</p>
+
+<div class="card mb-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-sun me-2"></i>Jornadas Registradas</span>
+    <button class="btn btn-sm btn-primary" id="btn-cargar-defecto">
+      <i class="bi bi-download me-1"></i>Cargar Jornadas por Defecto
+    </button>
+  </div>
+  <div class="card-body">
+    <div id="jornadas-msg" class="small mb-2"></div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Hora Inicio</th>
+            <th>Hora Fin</th>
+            <th>Descripción</th>
+          </tr>
+        </thead>
+        <tbody id="jornadas-tbody">
+          <tr><td colspan="5" class="text-muted">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="alert alert-info">
+  <i class="bi bi-info-circle me-2"></i>
+  <strong>Nota:</strong> Las jornadas son un catálogo estático usado para clasificar turnos.
+  El sistema identifica automáticamente la jornada según la hora de inicio del turno.
+  <ul class="mb-0 mt-2">
+    <li><strong>Mañana:</strong> Turnos que inician entre 06:00 y 14:00</li>
+    <li><strong>Tarde:</strong> Turnos que inician entre 14:00 y 22:00</li>
+    <li><strong>Noche:</strong> Turnos que inician entre 22:00 y 06:00 (cruza medianoche)</li>
+  </ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const tbody = document.getElementById('jornadas-tbody');
+  const msg = document.getElementById('jornadas-msg');
+  const btnCargar = document.getElementById('btn-cargar-defecto');
+
+  async function cargarJornadas() {
+    try {
+      const res = await api('/api/jornadas/');
+      const list = res.jornadas || [];
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No hay jornadas registradas. Usa el botón "Cargar Jornadas por Defecto" para inicializar.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = list.map(j => {
+        const hIni = `${String(j.hora_ini_h||0).padStart(2,'0')}:${String(j.hora_ini_m||0).padStart(2,'0')}`;
+        const hFin = `${String(j.hora_fin_h||0).padStart(2,'0')}:${String(j.hora_fin_m||0).padStart(2,'0')}`;
+        let desc = '';
+        if (j.nombre === 'Mañana') desc = 'Turnos matutinos';
+        else if (j.nombre === 'Tarde') desc = 'Turnos vespertinos';
+        else if (j.nombre === 'Noche') desc = 'Turnos nocturnos (cruza medianoche)';
+        return `
+          <tr>
+            <td>${j.jornada_id}</td>
+            <td><strong>${j.nombre}</strong></td>
+            <td>${hIni}</td>
+            <td>${hFin}</td>
+            <td>${desc}</td>
+          </tr>
+        `;
+      }).join('');
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="5" class="text-danger">Error: ${e.message||e}</td></tr>`;
+    }
+  }
+
+  btnCargar.addEventListener('click', async () => {
+    msg.textContent = '';
+    if (!confirm('¿Cargar jornadas por defecto? (solo si la tabla está vacía)')) return;
+    try {
+      await api('/api/jornadas/cargar_defecto/', { method: 'POST' });
+      msg.textContent = 'Jornadas cargadas correctamente.';
+      msg.className = 'text-success small';
+      setTimeout(() => cargarJornadas(), 400);
+    } catch (e) {
+      msg.textContent = e.message || e;
+      msg.className = 'text-danger small';
+    }
+  });
+
+  cargarJornadas();
+});
+</script>
+{% endblock %}

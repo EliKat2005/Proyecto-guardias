@@ -16,8 +16,10 @@ def _query(sql, params=None):
 
 @require_http_methods(["GET"])
 def turnos_por_sede_ciclo(request, sede_id, ciclo):
-    # ciclo: 'YYYY-MM-DD_HH:MI' → 'YYYY-MM-DD HH:MI'
-    ciclo_dt = ciclo.replace('_', ' ')
+    # ciclo puede venir como 'YYYY-MM-DD_HH:MI' o 'YYYY-MM-DDTHH:MI' (datetime-local)
+    # Convertir a formato Oracle: 'YYYY-MM-DD HH24:MI'
+    ciclo_dt = ciclo.replace('_', ' ').replace('T', ' ')
+    
     sql = """
     SELECT t.turno_id,
            g.apellidos || ', ' || g.nombres AS guardia,
@@ -38,13 +40,16 @@ def turnos_por_sede_ciclo(request, sede_id, ciclo):
 @csrf_exempt
 @require_http_methods(["POST"])
 def generar_rotacion(request):
-    try:
-        payload = json.loads(request.body.decode())
-        sede_id = int(payload['sede_id'])
-        ciclo   = payload['ciclo']   # 'YYYY-MM-DD HH24:MI'
-        inicio  = payload['inicio']  # 'YYYY-MM-DD HH24:MI'
-    except Exception as e:
-        return HttpResponseBadRequest(f'JSON inválido: {e}')
+    data = json.loads(request.body)
+    sede_id = data.get('sede_id')
+    ciclo = data.get('ciclo')
+    inicio = data.get('inicio')
+    
+    # Convertir formato datetime-local (YYYY-MM-DDTHH:MM) a formato Oracle
+    # El input datetime-local envía: "2025-11-09T13:46"
+    ciclo_formatted = ciclo.replace('T', ' ') if ciclo and 'T' in ciclo else ciclo
+    inicio_formatted = inicio.replace('T', ' ') if inicio and 'T' in inicio else inicio
+    
     plsql = """
     BEGIN
       pkg_guardias.generar_rotacion(
@@ -55,13 +60,17 @@ def generar_rotacion(request):
     END;
     """
     with connection.cursor() as cur:
-        cur.execute(plsql, {'sede': sede_id, 'ciclo': ciclo, 'inicio': inicio})
+        cur.execute(plsql, {'sede': sede_id, 'ciclo': ciclo_formatted, 'inicio': inicio_formatted})
     return JsonResponse({'status': 'ok', 'message': 'Rotación generada'})
 
 @csrf_exempt
 @require_http_methods(["POST"])
 def eliminar_turno(request, turno_id):
-    plsql = "BEGIN pkg_guardias.eliminar_turno_y_ajustar(:turno); END;"
+    plsql = """
+    BEGIN
+      pkg_guardias.eliminar_turno_y_ajustar(p_turno_id => :turno);
+    END;
+    """
     with connection.cursor() as cur:
         cur.execute(plsql, {'turno': turno_id})
     return JsonResponse({'status': 'ok', 'message': f'Turno {turno_id} eliminado y vecinos ajustados'})
@@ -72,15 +81,33 @@ def eventos(request):
       SELECT reporte_id, tipo_evento,
              TO_CHAR(fecha_evento,'YYYY-MM-DD HH24:MI:SS') AS fecha_evento,
              sede_id, guardia_id, turno_id,
-             SUBSTR(detalle,1,160) AS detalle
+             detalle
       FROM reporte_eventos
       ORDER BY fecha_evento DESC
     """)
+    # Asegurar que los campos CLOB/LOB se conviertan a texto legible
+    for row in data:
+        if 'detalle' in row and row['detalle'] is not None:
+            try:
+                v = row['detalle']
+                # Si es un LOB con método read()
+                if hasattr(v, 'read'):
+                    txt = v.read()
+                else:
+                    txt = str(v)
+                row['detalle'] = txt[:160]
+            except Exception:
+                # Fallback a string simple
+                try:
+                    row['detalle'] = str(row['detalle'])[:160]
+                except Exception:
+                    row['detalle'] = ''
     return JsonResponse({'eventos': data})
 
 
 
 # ======================
+
 # SEDES
 # ======================
 @require_http_methods(["GET"])
@@ -91,6 +118,16 @@ def sedes_list(request):
                 ORDER BY nombre, ciudad
         """)
         return JsonResponse({'sedes': rows})
+
+@require_http_methods(["GET"])
+def sedes_detail(request, sede_id):
+    rows = _query("""
+        SELECT sede_id, nombre, ciudad, slot_minutos, max_guardias, activo, TO_CHAR(creado_en,'YYYY-MM-DD HH24:MI:SS') creado_en
+        FROM sedes WHERE sede_id = :sede
+    """, {'sede': sede_id})
+    if not rows:
+        return HttpResponse(status=404)
+    return JsonResponse({'sede': rows[0]})
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -119,6 +156,42 @@ def sede_crear(request):
                 """, {'p_nombre': nombre, 'p_ciudad': ciudad, 'p_slot': slot, 'p_max': maxg, 'p_id': out_id})
                 sede_id = int(out_id.getvalue())
         return JsonResponse({'status': 'ok', 'sede_id': sede_id})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def sede_editar(request, sede_id):
+    try:
+        payload = json.loads(request.body.decode())
+    except Exception as e:
+        return HttpResponseBadRequest(f'JSON inválido: {e}')
+
+    fields = []
+    params = {}
+    if 'nombre' in payload:
+        fields.append('nombre = :nombre')
+        params['nombre'] = payload['nombre']
+    if 'ciudad' in payload:
+        fields.append('ciudad = :ciudad')
+        params['ciudad'] = payload['ciudad']
+    if 'slot_minutos' in payload:
+        fields.append('slot_minutos = :slot')
+        params['slot'] = int(payload['slot_minutos'])
+    if 'max_guardias' in payload:
+        fields.append('max_guardias = :maxg')
+        params['maxg'] = int(payload['max_guardias'])
+    if 'activo' in payload:
+        fields.append('activo = :activo')
+        params['activo'] = payload['activo']
+
+    if not fields:
+        return HttpResponseBadRequest('Nada que actualizar')
+
+    params['sede'] = sede_id
+    sql = f"UPDATE sedes SET {', '.join(fields)} WHERE sede_id = :sede"
+    with connection.cursor() as cur:
+        cur.execute(sql, params)
+    return JsonResponse({'status': 'ok', 'sede_id': sede_id})
 
 
 # ======================
@@ -206,9 +279,74 @@ def guardia_baja(request):
     return JsonResponse({'status': 'ok'})
 
 
+@csrf_exempt
+@require_http_methods(["POST"])
+def guardia_editar(request, guardia_id):
+    try:
+        payload = json.loads(request.body.decode())
+    except Exception as e:
+        return HttpResponseBadRequest(f'JSON inválido: {e}')
+
+    fields = []
+    params = {}
+    if 'apellidos' in payload:
+        fields.append('apellidos = :apellidos')
+        params['apellidos'] = payload['apellidos']
+    if 'nombres' in payload:
+        fields.append('nombres = :nombres')
+        params['nombres'] = payload['nombres']
+    if 'sueldo' in payload:
+        fields.append('sueldo = :sueldo')
+        params['sueldo'] = float(payload['sueldo'])
+    if 'orden_rotativo' in payload:
+        fields.append('orden_rotativo = :orden')
+        params['orden'] = int(payload['orden_rotativo'])
+    if 'sede_id' in payload:
+        fields.append('sede_id = :sede_id')
+        params['sede_id'] = int(payload['sede_id'])
+    if 'activo' in payload:
+        fields.append('activo = :activo')
+        params['activo'] = payload['activo']
+
+    if not fields:
+        return HttpResponseBadRequest('Nada que actualizar')
+
+    params['guardia'] = guardia_id
+    sql = f"UPDATE guardias SET {', '.join(fields)} WHERE guardia_id = :guardia"
+    with connection.cursor() as cur:
+        cur.execute(sql, params)
+    return JsonResponse({'status': 'ok', 'guardia_id': guardia_id})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def guardia_reactivar(request):
+    try:
+        payload = json.loads(request.body.decode())
+        guardia_id = int(payload['guardia_id'])
+    except Exception as e:
+        return HttpResponseBadRequest(f'JSON inválido: {e}')
+    with connection.cursor() as cur:
+        cur.execute("UPDATE guardias SET activo = 'S' WHERE guardia_id = :id", {'id': guardia_id})
+    return JsonResponse({'status': 'ok', 'guardia_id': guardia_id})
+
+
 # ======================
 # JORNADAS
 # ======================
+@require_http_methods(["GET"])
+def jornadas_list(request):
+        rows = _query("""
+                SELECT jornada_id, nombre,
+                       EXTRACT(HOUR FROM hora_ini_ref) AS hora_ini_h,
+                       EXTRACT(MINUTE FROM hora_ini_ref) AS hora_ini_m,
+                       EXTRACT(HOUR FROM hora_fin_ref) AS hora_fin_h,
+                       EXTRACT(MINUTE FROM hora_fin_ref) AS hora_fin_m
+                FROM jornadas
+                ORDER BY jornada_id
+        """)
+        return JsonResponse({'jornadas': rows})
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def cargar_jornadas_defecto(request):
@@ -297,5 +435,44 @@ def reporte_horas_csv(request):
         for r in rows:
                 w.writerow([r['sede'], r['guardia_id'], r['guardia'], r['fecha'], r['horas']])
         return resp
+
+
+@require_http_methods(["GET"])
+def reporte_horas_diarias(request):
+        """
+        Usa la vista vw_horas_por_guardia_dia para obtener desglose diario.
+        Query params opcionales: sede, guardia_id, desde, hasta
+        
+        NOTA: Esta funcionalidad requiere que exista la vista VW_HORAS_POR_GUARDIA_DIA en Oracle.
+        Si la vista no existe, retorna un error amigable.
+        """
+        sede = request.GET.get('sede')
+        guardia_id = request.GET.get('guardia_id')
+        desde = request.GET.get('desde')
+        hasta = request.GET.get('hasta')
+
+        sql = """
+        SELECT guardia_id, apellidos, nombres, sede, fecha, horas
+        FROM vw_horas_por_guardia_dia
+        WHERE (:sede IS NULL OR UPPER(sede) LIKE '%%' || UPPER(:sede) || '%%')
+          AND (:guardia_id IS NULL OR guardia_id = :guardia_id)
+          AND (:desde IS NULL OR fecha >= TO_DATE(:desde, 'YYYY-MM-DD'))
+          AND (:hasta IS NULL OR fecha <= TO_DATE(:hasta, 'YYYY-MM-DD'))
+        ORDER BY sede, fecha DESC, apellidos, nombres
+        """
+        try:
+                rows = _query(sql, {'sede': sede, 'guardia_id': guardia_id, 'desde': desde, 'hasta': hasta})
+                # Normalizar decimales
+                for r in rows:
+                        if 'horas' in r and r['horas'] is not None:
+                                r['horas'] = float(r['horas'])
+                return JsonResponse({'rows': rows})
+        except Exception as e:
+                error_msg = str(e)
+                if 'ORA-00942' in error_msg:
+                        return JsonResponse({
+                                'error': 'La vista VW_HORAS_POR_GUARDIA_DIA no existe en la base de datos. Por favor cree la vista primero.'
+                        }, status=500)
+                return JsonResponse({'error': error_msg}, status=500)
 
 

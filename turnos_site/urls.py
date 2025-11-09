@@ -39,10 +39,16 @@ def reportes(request):
     # Página de reportes con ejemplo de uso de endpoints JSON/CSV
     return render(request, 'reportes.html', {})
 
+
+def jornadas(request):
+    # Página de gestión de jornadas (catálogo)
+    return render(request, 'jornadas.html', {})
+
 urlpatterns = [
     path('', home, name='home'),
     path('sedes/', sedes, name='sedes'),
     path('guardias/', guardias, name='guardias'),
+    path('jornadas/', jornadas, name='jornadas'),
     path('reportes/', reportes, name='reportes'),
     path('admin/', admin.site.urls),
     path('api/', include('guardias.urls')),
