@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Reportes - Agencia de Guardias{% endblock %}
+
+{% block content %}
+<h3>Reportes</h3>
+<p class="text-muted">Panel de reportes. Puedes descargar reportes de horas en CSV o consultar via API.</p>
+<ul>
+  <li><strong>Eventos recientes (JSON):</strong> <code>/api/reportes/eventos/</code></li>
+  <li><strong>Horas (JSON):</strong> <code>/api/reportes/horas/?desde=YYYY-MM-DD&hasta=YYYY-MM-DD</code></li>
+  <li><strong>Horas (CSV):</strong> <code>/api/reportes/horas.csv?desde=YYYY-MM-DD&hasta=YYYY-MM-DD</code></li>
+</ul>
+{% endblock %}

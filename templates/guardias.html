@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Guardias - Agencia de Guardias{% endblock %}
+
+{% block content %}
+<h3>Guardias</h3>
+<p class="text-muted">Listado básico de guardias (solo lectura).</p>
+<div class="table-responsive">
+  <table class="table table-sm table-striped align-middle">
+    <thead>
+      <tr><th>ID</th><th>Apellido, Nombre</th><th>Sede</th><th>Activo</th></tr>
+    </thead>
+    <tbody>
+      {% for g in guardias %}
+      <tr>
+        <td>{{ g.guardia_id }}</td>
+        <td>{{ g.apellidos }}, {{ g.nombres }}</td>
+        <td>{{ g.sede_nombre }}</td>
+        <td>{{ g.activo }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="text-muted">No hay guardias.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
