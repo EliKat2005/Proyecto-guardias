@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Inicio - Agencia de Guardias{% endblock %}
+
+{% block content %}
+<div class="row g-4 align-items-stretch">
+  <div class="col-lg-5">
+    <div class="card h-100 card-gradient">
+      <div class="card-header fw-bold">Generar rotación (24h)</div>
+      <div class="card-body">
+        <form id="form-gen" class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Sede</label>
+            <select class="form-select" id="sede_id" required>
+              {% for s in sedes %}
+                <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Máximo guardias: <b id="max_guardias_hint">—</b> • Slot: <b id="slot_minutos_hint">—</b> min</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Ciclo (YYYY-MM-DD HH:MM)</label>
+            <input type="text" class="form-control" id="ciclo" placeholder="2025-11-10 07:00" required>
+            <div class="form-text">Inicio y ancla del ciclo de 24h</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Inicio (YYYY-MM-DD HH:MM)</label>
+            <input type="text" class="form-control" id="inicio" placeholder="2025-11-10 07:00" required>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary" type="submit">Generar rotación</button>
+            <span id="gen-msg" class="ms-2"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header fw-bold">Consultar turnos de un ciclo</div>
+      <div class="card-body">
+        <form id="form-q" class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Sede</label>
+            <select class="form-select" id="qsede" required>
+              {% for s in sedes %}
+                <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Ciclo (YYYY-MM-DD HH:MM)</label>
+            <input type="text" class="form-control" id="qciclo" placeholder="2025-11-09 07:00" required>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-secondary" type="submit">Listar turnos</button>
+          </div>
+        </form>
+        <hr/>
+        <div id="turnos-box" class="d-none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="mb-0">Turnos del ciclo</h5>
+            <small class="text-muted">Los ajustes por eliminación se aplican automáticamente en cascada</small>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle">
+              <thead>
+                <tr>
+                  <th>ID</th><th>Guardia</th><th>Inicio</th><th>Fin</th><th>Horas</th><th>Jornada</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="turnos-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="my-4"/>
+
+<div class="card">
+  <div class="card-header fw-bold">Eventos recientes</div>
+  <div class="card-body">
+    <pre id="eventos" class="mono small bg-light p-3 border rounded" style="max-height: 260px; overflow:auto;">Cargando…</pre>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const tbody = document.getElementById('turnos-tbody');
+const turnosBox = document.getElementById('turnos-box');
+const eventosPre = document.getElementById('eventos');
+const sedeSelect = document.getElementById('sede_id');
+const hintMax = document.getElementById('max_guardias_hint');
+const hintSlot = document.getElementById('slot_minutos_hint');
+
+async function cargarEventos() {
+  try {
+    const data = await api('/api/reportes/eventos/');
+    eventosPre.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    eventosPre.textContent = e.message || String(e);
+  }
+}
+cargarEventos();
+
+function actualizarHintsSede() {
+  const opt = sedeSelect.options[sedeSelect.selectedIndex];
+  // En esta demo no tenemos API para sedes; si quisieras, hacemos un endpoint.
+  // Para ahora, dejemos hints vacíos. Alternativa rápida: data-attributes en options.
+}
+actualizarHintsSede();
+
+document.getElementById('form-gen').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const sede_id = document.getElementById('sede_id').value;
+  const ciclo   = document.getElementById('ciclo').value;
+  const inicio  = document.getElementById('inicio').value;
+  const msg = document.getElementById('gen-msg');
+  msg.textContent = '';
+  msg.className = '';
+
+  try {
+    await api('/api/rotacion/generar/', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sede_id, ciclo, inicio })
+    });
+    msg.textContent = '✓ Rotación generada';
+    msg.className = 'text-success';
+    cargarEventos();
+  } catch (e) {
+    msg.textContent = '✗ ' + (e.message || e);
+    msg.className = 'text-danger';
+  }
+});
+
+document.getElementById('form-q').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const sede_id = document.getElementById('qsede').value;
+  const ciclo   = document.getElementById('qciclo').value.replace(' ', '_');
+  tbody.innerHTML = '';
+  turnosBox.classList.add('d-none');
+  try {
+    const data = await api(`/api/turnos/${sede_id}/${ciclo}/`);
+    for (const t of data.turnos) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${t.turno_id}</td>
+        <td>${t.guardia||''}</td>
+        <td>${t.inicio}</td>
+        <td>${t.fin}</td>
+        <td>${t.horas}</td>
+        <td>${t.jornada||''}</td>
+        <td>
+          <button data-id="${t.turno_id}" class="btn btn-sm btn-outline-danger btn-del">Eliminar</button>
+        </td>`;
+      tbody.appendChild(tr);
+    }
+    turnosBox.classList.remove('d-none');
+  } catch (e) {
+    alert(e.message || e);
+  }
+});
+
+tbody.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('.btn-del');
+  if (!btn) return;
+  const id = btn.getAttribute('data-id');
+  if (!confirm(`¿Eliminar turno ${id} y ajustar vecinos?`)) return;
+  try {
+    await api(`/api/turno/eliminar/${id}/`, { method: 'POST' });
+    btn.closest('tr').remove();
+    cargarEventos();
+  } catch (e) {
+    alert(e.message || e);
+  }
+});
+</script>
+{% endblock %}
