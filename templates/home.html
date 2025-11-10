@@ -17,7 +17,6 @@
                 <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
               {% endfor %}
             </select>
-            <div class="form-text">Máximo guardias: <b id="max_guardias_hint">—</b> • Slot: <b id="slot_minutos_hint">—</b> min</div>
           </div>
           <div class="col-md-6">
             <label class="form-label">Ciclo (inicio del ciclo 24h)</label>
@@ -42,6 +41,7 @@
             <label class="form-label">Eliminar rotación (sede + ciclo)</label>
           </div>
           <div class="col-md-6">
+            <label class="form-label">Sede</label>
             <select class="form-select" id="del_rot_sede" required>
               <option value="">-- Sede --</option>
               {% for s in sedes %}
@@ -50,7 +50,10 @@
             </select>
           </div>
           <div class="col-md-6">
-            <input type="datetime-local" class="form-control" id="del_rot_ciclo" required>
+            <label class="form-label">Ciclo</label>
+            <select class="form-select" id="del_rot_ciclo_sel" required>
+              <option value="">-- Ciclo --</option>
+            </select>
           </div>
           <div class="col-12">
             <button class="btn btn-outline-danger w-100" type="submit"><i class="bi bi-x-circle me-2"></i>Eliminar rotación</button>
@@ -78,7 +81,9 @@
           </div>
           <div class="col-md-6">
             <label class="form-label">Ciclo (fecha/hora del ciclo)</label>
-            <input type="datetime-local" class="form-control" id="qciclo" required>
+            <select class="form-select" id="qciclo_sel" required>
+              <option value="">-- Seleccione un ciclo --</option>
+            </select>
           </div>
           <div class="col-12">
             <button class="btn btn-secondary w-100" type="submit">
@@ -158,7 +163,10 @@ document.addEventListener('DOMContentLoaded', function () {
   const hintMax = document.getElementById('max_guardias_hint');
   const hintSlot = document.getElementById('slot_minutos_hint');
   const qsede = document.getElementById('qsede');
+  const qcicloSel = document.getElementById('qciclo_sel');
   const btnRefreshEventos = document.getElementById('btn-refresh-eventos');
+  const delRotSede = document.getElementById('del_rot_sede');
+  const delRotCicloSel = document.getElementById('del_rot_ciclo_sel');
 
   // Helper para badges de tipo de evento
   function badgeTipo(tipo) {
@@ -281,6 +289,21 @@ document.addEventListener('DOMContentLoaded', function () {
         msg.textContent = '✓ Rotación generada';
         msg.className = 'text-success';
         cargarEventos();
+        // refrescar ciclos en selects de consulta y eliminación
+        await (async () => {
+          const cicloVal = (ciclo || '').replace('T',' ');
+          await loadCyclesForSede(sede_id, qcicloSel, '-- Seleccione un ciclo --');
+          await loadCyclesForSede(sede_id, delRotCicloSel, '-- Ciclo --');
+          // intentar preseleccionar el recién generado
+          if (qcicloSel) {
+            const opt = [...qcicloSel.options].find(o => o.value === cicloVal);
+            if (opt) qcicloSel.value = cicloVal;
+          }
+          if (delRotCicloSel) {
+            const opt2 = [...delRotCicloSel.options].find(o => o.value === cicloVal);
+            if (opt2) delRotCicloSel.value = cicloVal;
+          }
+        })();
       } catch (e) {
         msg.textContent = '✗ ' + (e.message || e);
         msg.className = 'text-danger';
@@ -292,8 +315,8 @@ document.addEventListener('DOMContentLoaded', function () {
   if (formDelRot) {
     formDelRot.addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      const sede_id = document.getElementById('del_rot_sede').value;
-      const cicloRaw = document.getElementById('del_rot_ciclo').value;
+      const sede_id = delRotSede.value;
+      const cicloRaw = delRotCicloSel.value;
       const msg = document.getElementById('del-rot-msg');
       msg.textContent=''; msg.className='';
       if (!sede_id || !cicloRaw) { msg.textContent='Complete sede y ciclo'; msg.className='text-danger'; return; }
@@ -315,7 +338,7 @@ document.addEventListener('DOMContentLoaded', function () {
     formQ.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const sede_id = (document.getElementById('qsede') || {}).value;
-      const qcicloRaw = (document.getElementById('qciclo') || {}).value || '';
+      const qcicloRaw = (qcicloSel || {}).value || '';
       const qciclo = encodeURIComponent(qcicloRaw.trim());
       if (!sede_id || !qcicloRaw) {
         alert('Seleccione una sede y un ciclo');
@@ -364,6 +387,36 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     });
   }
+
+  // Cargar ciclos por sede y poblar selects
+  async function loadCyclesForSede(sedeId, targetSelect, placeholder='-- Ciclo --') {
+    if (!targetSelect) return;
+    targetSelect.innerHTML = `<option value="">${placeholder}</option>`;
+    if (!sedeId) { targetSelect.disabled = true; return; }
+    targetSelect.disabled = true;
+    try {
+      const data = await api(`/api/sedes/${encodeURIComponent(sedeId)}/ciclos/`);
+      const ciclos = data.ciclos || [];
+      if (!ciclos.length) {
+        targetSelect.innerHTML = `<option value="">(Sin ciclos)</option>`;
+        targetSelect.disabled = true;
+        return;
+      }
+      targetSelect.innerHTML = `<option value="">${placeholder}</option>` + ciclos.map(c => `<option value="${c}">${c}</option>`).join('');
+      targetSelect.disabled = false;
+    } catch (e) {
+      targetSelect.innerHTML = `<option value="">Error cargando ciclos</option>`;
+      targetSelect.disabled = true;
+    }
+  }
+
+  // Eventos de cambio de sede para cargar ciclos
+  if (qsede) qsede.addEventListener('change', () => loadCyclesForSede(qsede.value, qcicloSel, '-- Seleccione un ciclo --'));
+  if (delRotSede) delRotSede.addEventListener('change', () => loadCyclesForSede(delRotSede.value, delRotCicloSel, '-- Ciclo --'));
+
+  // Carga inicial si ya hay sede seleccionada
+  if (qsede && qsede.value) loadCyclesForSede(qsede.value, qcicloSel, '-- Seleccione un ciclo --');
+  if (delRotSede && delRotSede.value) loadCyclesForSede(delRotSede.value, delRotCicloSel, '-- Ciclo --');
 
   // Delegación para botones Eliminar
   if (tbody) {

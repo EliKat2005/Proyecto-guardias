@@ -129,6 +129,22 @@ def sedes_detail(request, sede_id):
         return HttpResponse(status=404)
     return JsonResponse({'sede': rows[0]})
 
+@require_http_methods(["GET"])
+def sedes_ciclos(request, sede_id):
+        """Lista los ciclos (fechas) distintos existentes para una sede, ordenados desc."""
+        sql = """
+        SELECT TO_CHAR(cf, 'YYYY-MM-DD HH24:MI') AS ciclo
+        FROM (
+            SELECT DISTINCT ciclo_fecha AS cf
+            FROM turnos
+            WHERE sede_id = :sede
+        )
+        ORDER BY cf DESC
+        """
+        rows = _query(sql, {'sede': sede_id})
+        ciclos = [r['ciclo'] for r in rows]
+        return JsonResponse({'sede_id': sede_id, 'ciclos': ciclos})
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def sede_crear(request):

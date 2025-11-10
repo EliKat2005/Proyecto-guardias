@@ -18,6 +18,7 @@ urlpatterns = [
     # NUEVAS 	6 SEDES
     path('sedes/', views.sedes_list, name='sedes_list'),
     path('sedes/<int:sede_id>/', views.sedes_detail, name='sedes_detail'),
+    path('sedes/<int:sede_id>/ciclos/', views.sedes_ciclos, name='sedes_ciclos'),
     path('sedes/crear/', views.sede_crear, name='sede_crear'),
     path('sedes/<int:sede_id>/editar/', views.sede_editar, name='sede_editar'),
     path('sedes/<int:sede_id>/eliminar/', views.sede_eliminar, name='sede_eliminar'),
