@@ -2,15 +2,27 @@
 
 Aplicación Django conectada a Oracle para administrar guardias, sedes, rotaciones de 24 horas y reportes de horas trabajadas. Integra lógica de negocio en PL/SQL (paquete `pkg_guardias`) y una vista analítica `vw_horas_por_guardia_dia`.
 
+> 📚 **NUEVO:** Ver [INDICE_DOCUMENTACION.md](./INDICE_DOCUMENTACION.md) para acceso rápido a toda la documentación, incluyendo guías de inicio rápido, ejemplos de uso y diagramas visuales.
+
 ### Características principales
 - Generación de rotación de 24h por sede (`pkg_guardias.generar_rotacion`)
+- **Agregar guardias a rotaciones activas** - Crea guardias nuevos y añádelos automáticamente a ciclos en ejecución
+  - Opción para especificar hora exacta de integración
+  - Ajuste automático de turnos vecinos
+  - Configuración de duración personalizada de turnos
+- **Modificar horas de turno en caliente** - Redistribuye turnos de guardias en ciclos activos
+  - Modificar duración de turnos para todos los guardias del ciclo
+  - Modificar solo turnos de un guardia específico manteniendo los demás
+  - Redistribución automática equitativa de las 24 horas
 - Eliminación de turno con ajuste automático de vecinos (`pkg_guardias.eliminar_turno_y_ajustar`)
-- CRUD de Sedes (activar/desactivar)
+- CRUD de Sedes (activar/desactivar, eliminación con verificación de dependencias)
 - CRUD de Guardias (alta, baja con reglas de negocio, reactivación, edición)
 - Catálogo Jornadas (carga automática por paquete o fallback)
 - Reportes: horas agregadas y horas diarias (vista Oracle)
 - Exportación CSV de horas trabajadas
 - Registro de eventos del sistema (tabla `reporte_eventos`)
+- Interfaz de tema claro/oscuro con persistencia
+- Selección dinámica de ciclos existentes para consultas y eliminaciones
 
 ### Requisitos
 - Python 3.13+
@@ -54,6 +66,12 @@ GROUP BY g.guardia_id, g.apellidos, g.nombres, s.nombre, TRUNC(t.inicio);
 
 ### Endpoints principales (API)
 - `POST /api/rotacion/generar/` Genera rotación de 24h
+- `POST /api/rotacion/agregar-guardia/` Agrega guardia a ciclo activo con opciones avanzadas:
+  - `hora_inicio` (opcional): Hora específica de integración
+  - `duracion_turnos_min` (opcional): Duración personalizada de turnos
+- `POST /api/rotacion/modificar-horas/` Redistribuye horas de turno en ciclo activo:
+  - Puede modificar todos los guardias o solo uno específico
+  - Ajusta automáticamente la distribución manteniendo 24h totales
 - `GET /api/turnos/<sede_id>/<ciclo>/` Lista turnos de un ciclo (fecha con `T` o `_`)
 - `POST /api/turno/eliminar/<turno_id>/` Elimina turno y ajusta vecinos
 - `GET /api/reportes/eventos/` Eventos recientes

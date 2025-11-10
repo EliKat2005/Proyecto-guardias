@@ -415,6 +415,539 @@ def rotacion_eliminar(request, sede_id, ciclo):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
 
+@csrf_exempt
+@require_http_methods(["POST"])
+def rotacion_agregar_guardia(request):
+    """
+    Agrega un guardia a una rotación existente, generando turnos automáticamente.
+    Body JSON: {
+        "guardia_id": 10,
+        "sede_id": 1,
+        "ciclo": "2025-11-10 08:00",
+        "hora_inicio": "2025-11-10 14:00",  # opcional - hora específica de integración
+        "duracion_turnos_min": 120  # opcional - duración deseada de cada turno en minutos
+    }
+    
+    Estrategia mejorada:
+    1. Validar que el guardia pertenece a la sede y está activo
+    2. Si se especifica hora_inicio, insertar al guardia en ese momento ajustando turnos vecinos
+    3. Si no se especifica, buscar huecos en el ciclo
+    4. Redistribuir equitativamente las horas entre todos los guardias
+    """
+    try:
+        data = json.loads(request.body)
+        guardia_id = int(data.get('guardia_id'))
+        sede_id = int(data.get('sede_id'))
+        ciclo = data.get('ciclo', '')
+        ciclo_dt = ciclo.replace('_', ' ').replace('T', ' ')
+        hora_inicio = data.get('hora_inicio')  # opcional
+        duracion_turnos_min = data.get('duracion_turnos_min')  # opcional
+        
+        from datetime import datetime, timedelta
+        
+        with connection.cursor() as cur:
+            # 1. Validar guardia
+            cur.execute("""
+                SELECT g.guardia_id, g.activo, s.slot_minutos, s.nombre
+                FROM guardias g
+                JOIN sedes s ON s.sede_id = g.sede_id
+                WHERE g.guardia_id = :gid AND g.sede_id = :sid
+            """, {'gid': guardia_id, 'sid': sede_id})
+            row = cur.fetchone()
+            if not row:
+                return JsonResponse({'error': 'Guardia no encontrado o no pertenece a la sede'}, status=404)
+            if row[1] != 'S':
+                return JsonResponse({'error': 'El guardia no está activo'}, status=400)
+            
+            slot_min = duracion_turnos_min or row[2] or 120
+            sede_nombre = row[3]
+            
+            # 2. Verificar si ya tiene turnos en este ciclo
+            cur.execute("""
+                SELECT COUNT(*) FROM turnos
+                WHERE guardia_id = :gid
+                  AND sede_id = :sid
+                  AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+            """, {'gid': guardia_id, 'sid': sede_id, 'ciclo': ciclo_dt})
+            ya_tiene = cur.fetchone()[0]
+            if ya_tiene > 0:
+                return JsonResponse({'error': 'El guardia ya tiene turnos en este ciclo'}, status=400)
+            
+            # 3. Obtener turnos existentes del ciclo (ordenados por inicio)
+            cur.execute("""
+                SELECT turno_id, guardia_id,
+                       inicio, fin,
+                       ROUND((fin - inicio) * 24 * 60) AS duracion_min
+                FROM turnos
+                WHERE sede_id = :sid
+                  AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                ORDER BY inicio
+            """, {'sid': sede_id, 'ciclo': ciclo_dt})
+            turnos_existentes = cur.fetchall()
+            
+            if not turnos_existentes:
+                return JsonResponse({'error': 'No hay rotación activa en este ciclo. Genere primero una rotación.'}, status=400)
+            
+            ciclo_inicio = datetime.strptime(ciclo_dt, '%Y-%m-%d %H:%M')
+            ciclo_fin = ciclo_inicio + timedelta(hours=24)
+            
+            # Obtener jornada por defecto
+            cur.execute("SELECT jornada_id FROM jornadas WHERE ROWNUM = 1")
+            jornada_row = cur.fetchone()
+            jornada_id = jornada_row[0] if jornada_row else None
+            
+            turnos_creados = 0
+            
+            # CASO 1: Se especificó hora_inicio - insertar en momento específico ajustando vecinos
+            if hora_inicio:
+                hora_inicio_dt = hora_inicio.replace('_', ' ').replace('T', ' ')
+                momento_insercion = datetime.strptime(hora_inicio_dt, '%Y-%m-%d %H:%M')
+                
+                # Validar que la hora está dentro del ciclo
+                if momento_insercion < ciclo_inicio or momento_insercion >= ciclo_fin:
+                    return JsonResponse({'error': 'La hora de inicio debe estar dentro del ciclo de 24h'}, status=400)
+                
+                # Encontrar el turno que contiene este momento
+                turno_a_dividir = None
+                for t in turnos_existentes:
+                    if t[2] <= momento_insercion < t[3]:
+                        turno_a_dividir = t
+                        break
+                
+                if not turno_a_dividir:
+                    return JsonResponse({'error': 'No hay ningún turno en ese momento para ajustar'}, status=400)
+                
+                # Dividir el turno existente
+                turno_id_orig = turno_a_dividir[0]
+                guardia_id_orig = turno_a_dividir[1]
+                inicio_orig = turno_a_dividir[2]
+                fin_orig = turno_a_dividir[3]
+                
+                # Calcular fin del nuevo turno (usar slot_min)
+                fin_nuevo_turno = momento_insercion + timedelta(minutes=slot_min)
+                if fin_nuevo_turno > fin_orig:
+                    fin_nuevo_turno = fin_orig
+                
+                # Actualizar turno original para que termine cuando empieza el nuevo
+                cur.execute("""
+                    UPDATE turnos 
+                    SET fin = :nuevo_fin
+                    WHERE turno_id = :tid
+                """, {'nuevo_fin': momento_insercion, 'tid': turno_id_orig})
+                
+                # Insertar nuevo turno
+                cur.execute("""
+                    INSERT INTO turnos (sede_id, ciclo_fecha, guardia_id, inicio, fin, jornada_id)
+                    VALUES (:sede, TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI'), :guardia, :inicio, :fin, :jornada)
+                """, {
+                    'sede': sede_id,
+                    'ciclo': ciclo_dt,
+                    'guardia': guardia_id,
+                    'inicio': momento_insercion,
+                    'fin': fin_nuevo_turno,
+                    'jornada': jornada_id
+                })
+                turnos_creados += 1
+                
+                # Si queda espacio después del nuevo turno, crear otro turno para el guardia original
+                if fin_nuevo_turno < fin_orig:
+                    duracion_restante = (fin_orig - fin_nuevo_turno).total_seconds() / 60
+                    if duracion_restante >= 30:  # Mínimo 30 minutos
+                        cur.execute("""
+                            INSERT INTO turnos (sede_id, ciclo_fecha, guardia_id, inicio, fin, jornada_id)
+                            VALUES (:sede, TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI'), :guardia, :inicio, :fin, :jornada)
+                        """, {
+                            'sede': sede_id,
+                            'ciclo': ciclo_dt,
+                            'guardia': guardia_id_orig,
+                            'inicio': fin_nuevo_turno,
+                            'fin': fin_orig,
+                            'jornada': jornada_id
+                        })
+                
+            # CASO 2: No se especificó hora - buscar huecos y distribuir equitativamente
+            else:
+                # Calcular guardias únicos y duración promedio
+                guardias_unicos = len(set(t[1] for t in turnos_existentes))
+                total_min = sum(t[4] for t in turnos_existentes)
+                
+                # Con el nuevo guardia, recalcular distribución
+                guardias_unicos += 1
+                duracion_promedio_por_guardia = 1440 / guardias_unicos  # 24h = 1440 min
+                num_turnos_nuevos = max(1, int(duracion_promedio_por_guardia / slot_min))
+                
+                # Buscar huecos
+                intervalos_ocupados = [(t[2], t[3]) for t in turnos_existentes]
+                intervalos_ocupados.sort()
+                
+                huecos = []
+                t_actual = ciclo_inicio
+                for ini, fin in intervalos_ocupados:
+                    if t_actual < ini:
+                        huecos.append((t_actual, ini))
+                    t_actual = max(t_actual, fin)
+                if t_actual < ciclo_fin:
+                    huecos.append((t_actual, ciclo_fin))
+                
+                # Ordenar huecos por tamaño
+                huecos.sort(key=lambda h: (h[1] - h[0]), reverse=True)
+                
+                # Crear turnos en los huecos
+                duracion_slot = timedelta(minutes=slot_min)
+                for hueco_ini, hueco_fin in huecos:
+                    if turnos_creados >= num_turnos_nuevos:
+                        break
+                    
+                    hueco_duracion = (hueco_fin - hueco_ini).total_seconds() / 60
+                    turnos_en_hueco = int(hueco_duracion / slot_min)
+                    
+                    t_inicio = hueco_ini
+                    for _ in range(min(turnos_en_hueco, num_turnos_nuevos - turnos_creados)):
+                        t_fin = t_inicio + duracion_slot
+                        if t_fin > hueco_fin:
+                            break
+                        
+                        cur.execute("""
+                            INSERT INTO turnos (sede_id, ciclo_fecha, guardia_id, inicio, fin, jornada_id)
+                            VALUES (:sede, TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI'), :guardia, :inicio, :fin, :jornada)
+                        """, {
+                            'sede': sede_id,
+                            'ciclo': ciclo_dt,
+                            'guardia': guardia_id,
+                            'inicio': t_inicio,
+                            'fin': t_fin,
+                            'jornada': jornada_id
+                        })
+                        turnos_creados += 1
+                        t_inicio = t_fin
+            
+        return JsonResponse({
+            'status': 'ok',
+            'guardia_id': guardia_id,
+            'sede_id': sede_id,
+            'ciclo': ciclo_dt,
+            'turnos_creados': turnos_creados,
+            'message': f'Se crearon {turnos_creados} turno(s) para el guardia en el ciclo activo'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'JSON inválido'}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def rotacion_modificar_horas(request):
+    """
+    Modifica las horas de turno de todos los guardias en un ciclo activo,
+    redistribuyendo equitativamente el tiempo de 24 horas.
+    
+    Body JSON: {
+        "sede_id": 1,
+        "ciclo": "2025-11-10 08:00",
+        "nueva_duracion_min": 180  # nueva duración en minutos para cada turno
+    }
+    
+    O para modificar un guardia específico:
+    {
+        "sede_id": 1,
+        "ciclo": "2025-11-10 08:00",
+        "guardia_id": 5,
+        "nueva_duracion_min": 240
+    }
+    
+    La función:
+    1. Calcula cuántos turnos debe tener cada guardia con la nueva duración
+    2. Elimina los turnos actuales del ciclo (o del guardia específico)
+    3. Regenera los turnos con la nueva distribución
+    """
+    try:
+        data = json.loads(request.body)
+        sede_id = int(data.get('sede_id'))
+        ciclo = data.get('ciclo', '')
+        ciclo_dt = ciclo.replace('_', ' ').replace('T', ' ')
+        nueva_duracion_min = int(data.get('nueva_duracion_min', 120))
+        guardia_id_especifico = data.get('guardia_id')  # opcional
+        
+        if nueva_duracion_min < 30 or nueva_duracion_min > 1440:
+            return JsonResponse({'error': 'La duración debe estar entre 30 y 1440 minutos (24h)'}, status=400)
+        
+        from datetime import datetime, timedelta
+        ciclo_inicio = datetime.strptime(ciclo_dt, '%Y-%m-%d %H:%M')
+        ciclo_fin = ciclo_inicio + timedelta(hours=24)
+        
+        with connection.cursor() as cur:
+            # Verificar que existe el ciclo
+            cur.execute("""
+                SELECT COUNT(*) FROM turnos
+                WHERE sede_id = :sid AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+            """, {'sid': sede_id, 'ciclo': ciclo_dt})
+            
+            if cur.fetchone()[0] == 0:
+                return JsonResponse({'error': 'No existe rotación en este ciclo'}, status=404)
+            
+            # Obtener jornada por defecto
+            cur.execute("SELECT jornada_id FROM jornadas WHERE ROWNUM = 1")
+            jornada_row = cur.fetchone()
+            jornada_id = jornada_row[0] if jornada_row else None
+            
+            # Decidir el flujo según si es guardia específico o todos
+            if guardia_id_especifico:
+                # Verificar si el guardia tiene turnos en este ciclo
+                cur.execute("""
+                    SELECT COUNT(*) FROM turnos
+                    WHERE sede_id = :sid 
+                      AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                      AND guardia_id = :gid
+                """, {'sid': sede_id, 'ciclo': ciclo_dt, 'gid': int(guardia_id_especifico)})
+                
+                tiene_turnos = cur.fetchone()[0] > 0
+                
+                if not tiene_turnos:
+                    # El guardia NO está en el ciclo - AGREGAR turnos en huecos
+                    # Verificar que el guardia existe y está activo
+                    cur.execute("""
+                        SELECT g.guardia_id, g.activo
+                        FROM guardias g
+                        WHERE g.guardia_id = :gid AND g.sede_id = :sid
+                    """, {'gid': int(guardia_id_especifico), 'sid': sede_id})
+                    
+                    guardia_row = cur.fetchone()
+                    if not guardia_row:
+                        return JsonResponse({'error': 'El guardia no existe o no pertenece a esta sede'}, status=404)
+                    if guardia_row[1] != 'S':
+                        return JsonResponse({'error': 'El guardia no está activo'}, status=400)
+                    
+                    # Obtener huecos disponibles
+                    cur.execute("""
+                        SELECT inicio, fin
+                        FROM turnos
+                        WHERE sede_id = :sid 
+                          AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                        ORDER BY inicio
+                    """, {'sid': sede_id, 'ciclo': ciclo_dt})
+                    
+                    turnos_existentes = cur.fetchall()
+                    
+                    # Encontrar huecos
+                    huecos = []
+                    t_actual = ciclo_inicio
+                    for ini, fin in turnos_existentes:
+                        if t_actual < ini:
+                            huecos.append((t_actual, ini))
+                        t_actual = max(t_actual, fin)
+                    if t_actual < ciclo_fin:
+                        huecos.append((t_actual, ciclo_fin))
+                    
+                    if not huecos:
+                        return JsonResponse({'error': 'No hay espacio disponible en el ciclo para agregar turnos'}, status=400)
+                    
+                    # Ordenar huecos por tamaño
+                    huecos.sort(key=lambda h: (h[1] - h[0]), reverse=True)
+                    
+                    # Calcular cuántos turnos se pueden crear
+                    tiempo_disponible = sum((h[1] - h[0]).total_seconds() / 60 for h in huecos)
+                    num_turnos_guardia = max(1, int(tiempo_disponible / nueva_duracion_min))
+                    
+                    # Crear turnos en los huecos
+                    turnos_creados = 0
+                    for hueco_ini, hueco_fin in huecos:
+                        if turnos_creados >= num_turnos_guardia:
+                            break
+                        
+                        hueco_duracion = (hueco_fin - hueco_ini).total_seconds() / 60
+                        turnos_en_hueco = int(hueco_duracion / nueva_duracion_min)
+                        
+                        t_inicio = hueco_ini
+                        for _ in range(min(turnos_en_hueco, num_turnos_guardia - turnos_creados)):
+                            t_fin = min(t_inicio + timedelta(minutes=nueva_duracion_min), hueco_fin)
+                            
+                            cur.execute("""
+                                INSERT INTO turnos (sede_id, ciclo_fecha, guardia_id, inicio, fin, jornada_id)
+                                VALUES (:sede, TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI'), :guardia, :inicio, :fin, :jornada)
+                            """, {
+                                'sede': sede_id,
+                                'ciclo': ciclo_dt,
+                                'guardia': int(guardia_id_especifico),
+                                'inicio': t_inicio,
+                                'fin': t_fin,
+                                'jornada': jornada_id
+                            })
+                            turnos_creados += 1
+                            t_inicio = t_fin
+                    
+                    return JsonResponse({
+                        'status': 'ok',
+                        'sede_id': sede_id,
+                        'ciclo': ciclo_dt,
+                        'guardia_id': int(guardia_id_especifico),
+                        'turnos_creados': turnos_creados,
+                        'duracion_turno_min': nueva_duracion_min,
+                        'message': f'Guardia agregado al ciclo con {turnos_creados} turno(s) de {nueva_duracion_min} minutos'
+                    })
+                
+                # El guardia SÍ tiene turnos - modificar los existentes
+                # Eliminar turnos existentes del guardia
+                cur.execute("""
+                    DELETE FROM turnos
+                    WHERE sede_id = :sid 
+                      AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                      AND guardia_id = :gid
+                """, {'sid': sede_id, 'ciclo': ciclo_dt, 'gid': int(guardia_id_especifico)})
+                
+                # Para un guardia específico, calcular cuántos turnos necesita
+                # basado en su proporción del tiempo total
+                minutos_totales = 1440  # 24 horas
+                
+                # Obtener tiempo ocupado por otros guardias
+                cur.execute("""
+                    SELECT SUM((fin - inicio) * 24 * 60) FROM turnos
+                    WHERE sede_id = :sid 
+                      AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                      AND guardia_id != :gid
+                """, {'sid': sede_id, 'ciclo': ciclo_dt, 'gid': int(guardia_id_especifico)})
+                
+                minutos_otros = cur.fetchone()[0] or 0
+                minutos_disponibles = max(0, minutos_totales - minutos_otros)
+                num_turnos_guardia = max(1, int(minutos_disponibles / nueva_duracion_min))
+                
+                # Obtener huecos disponibles
+                cur.execute("""
+                    SELECT inicio, fin
+                    FROM turnos
+                    WHERE sede_id = :sid 
+                      AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                    ORDER BY inicio
+                """, {'sid': sede_id, 'ciclo': ciclo_dt})
+                
+                turnos_existentes = cur.fetchall()
+                
+                # Encontrar huecos
+                huecos = []
+                t_actual = ciclo_inicio
+                for ini, fin in turnos_existentes:
+                    if t_actual < ini:
+                        huecos.append((t_actual, ini))
+                    t_actual = max(t_actual, fin)
+                if t_actual < ciclo_fin:
+                    huecos.append((t_actual, ciclo_fin))
+                
+                # Ordenar huecos por tamaño
+                huecos.sort(key=lambda h: (h[1] - h[0]), reverse=True)
+                
+                # Crear turnos en los huecos
+                turnos_creados = 0
+                for hueco_ini, hueco_fin in huecos:
+                    if turnos_creados >= num_turnos_guardia:
+                        break
+                    
+                    hueco_duracion = (hueco_fin - hueco_ini).total_seconds() / 60
+                    turnos_en_hueco = int(hueco_duracion / nueva_duracion_min)
+                    
+                    t_inicio = hueco_ini
+                    for _ in range(min(turnos_en_hueco, num_turnos_guardia - turnos_creados)):
+                        t_fin = min(t_inicio + timedelta(minutes=nueva_duracion_min), hueco_fin)
+                        
+                        cur.execute("""
+                            INSERT INTO turnos (sede_id, ciclo_fecha, guardia_id, inicio, fin, jornada_id)
+                            VALUES (:sede, TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI'), :guardia, :inicio, :fin, :jornada)
+                        """, {
+                            'sede': sede_id,
+                            'ciclo': ciclo_dt,
+                            'guardia': int(guardia_id_especifico),
+                            'inicio': t_inicio,
+                            'fin': t_fin,
+                            'jornada': jornada_id
+                        })
+                        turnos_creados += 1
+                        t_inicio = t_fin
+                
+                return JsonResponse({
+                    'status': 'ok',
+                    'sede_id': sede_id,
+                    'ciclo': ciclo_dt,
+                    'guardia_id': int(guardia_id_especifico),
+                    'turnos_creados': turnos_creados,
+                    'duracion_turno_min': nueva_duracion_min,
+                    'message': f'Se reconfiguraron los turnos del guardia con duración de {nueva_duracion_min} minutos'
+                })
+            
+            else:
+                # Redistribuir equitativamente entre todos los guardias del ciclo
+                # Obtener guardias únicos del ciclo
+                cur.execute("""
+                    SELECT DISTINCT guardia_id FROM turnos
+                    WHERE sede_id = :sid AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                    ORDER BY guardia_id
+                """, {'sid': sede_id, 'ciclo': ciclo_dt})
+                
+                guardias_a_procesar = [row[0] for row in cur.fetchall()]
+                
+                if not guardias_a_procesar:
+                    return JsonResponse({'error': 'No hay guardias en este ciclo'}, status=400)
+                
+                num_guardias = len(guardias_a_procesar)
+                
+                # Eliminar todos los turnos existentes para redistribuir
+                cur.execute("""
+                    DELETE FROM turnos
+                    WHERE sede_id = :sid AND ciclo_fecha = TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI')
+                """, {'sid': sede_id, 'ciclo': ciclo_dt})
+                
+                # Redistribuir equitativamente
+                turnos_por_guardia = {}
+                tiempo_actual = ciclo_inicio
+                guardia_idx = 0
+                turnos_totales_creados = 0
+                
+                while tiempo_actual < ciclo_fin:
+                    guardia_id = guardias_a_procesar[guardia_idx]
+                    
+                    # Calcular fin del turno
+                    fin_turno = tiempo_actual + timedelta(minutes=nueva_duracion_min)
+                    if fin_turno > ciclo_fin:
+                        fin_turno = ciclo_fin
+                    
+                    # Insertar turno
+                    cur.execute("""
+                        INSERT INTO turnos (sede_id, ciclo_fecha, guardia_id, inicio, fin, jornada_id)
+                        VALUES (:sede, TO_DATE(:ciclo, 'YYYY-MM-DD HH24:MI'), :guardia, :inicio, :fin, :jornada)
+                    """, {
+                        'sede': sede_id,
+                        'ciclo': ciclo_dt,
+                        'guardia': guardia_id,
+                        'inicio': tiempo_actual,
+                        'fin': fin_turno,
+                        'jornada': jornada_id
+                    })
+                    
+                    if guardia_id not in turnos_por_guardia:
+                        turnos_por_guardia[guardia_id] = 0
+                    turnos_por_guardia[guardia_id] += 1
+                    turnos_totales_creados += 1
+                    
+                    tiempo_actual = fin_turno
+                    guardia_idx = (guardia_idx + 1) % num_guardias
+                
+                return JsonResponse({
+                    'status': 'ok',
+                    'sede_id': sede_id,
+                    'ciclo': ciclo_dt,
+                    'guardias_afectados': num_guardias,
+                    'turnos_totales_creados': turnos_totales_creados,
+                    'duracion_turno_min': nueva_duracion_min,
+                    'distribucion': turnos_por_guardia,
+                    'message': f'Se redistribuyeron los turnos con duración de {nueva_duracion_min} minutos'
+                })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'JSON inválido'}, status=400)
+    except ValueError as e:
+        return JsonResponse({'error': f'Valor inválido: {str(e)}'}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
 
 @require_http_methods(["GET"])
 def sede_eliminar_info(request, sede_id):

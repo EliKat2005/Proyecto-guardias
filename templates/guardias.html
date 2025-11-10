@@ -63,6 +63,42 @@
               <input name="orden_rotativo" type="number" class="form-control" value="1" required>
             </div>
           </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="chk-agregar-rotacion">
+            <label class="form-check-label" for="chk-agregar-rotacion">
+              Agregar automáticamente a una rotación activa después de crear
+            </label>
+          </div>
+          <div id="div-ciclo-agregar" class="mb-3 d-none">
+            <label class="form-label">Seleccione el ciclo</label>
+            <select class="form-select" id="select-ciclo-crear"></select>
+          </div>
+          <div id="div-opciones-avanzadas" class="mb-3 d-none">
+            <div class="card">
+              <div class="card-header py-2">
+                <small class="fw-bold"><i class="bi bi-sliders"></i> Opciones avanzadas de integración</small>
+              </div>
+              <div class="card-body py-2">
+                <div class="form-check mb-2">
+                  <input class="form-check-input" type="checkbox" id="chk-hora-especifica">
+                  <label class="form-check-label" for="chk-hora-especifica">
+                    <small>Especificar hora de inicio del turno</small>
+                  </label>
+                </div>
+                <div id="div-hora-inicio" class="mb-2 d-none">
+                  <label class="form-label small">Hora de inicio del primer turno</label>
+                  <input type="datetime-local" class="form-control form-control-sm" id="input-hora-inicio">
+                  <div class="form-text">El guardia se integrará en este momento, ajustando los turnos vecinos</div>
+                </div>
+                <div class="mb-2">
+                  <label class="form-label small">Duración de cada turno (minutos)</label>
+                  <input type="number" class="form-control form-control-sm" id="input-duracion-turno" 
+                         value="120" min="30" max="480" step="30">
+                  <div class="form-text">Entre 30 y 480 minutos (8 horas)</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div id="guardia-msg" class="small"></div>
         </div>
         <div class="modal-footer">
@@ -84,25 +120,107 @@ document.addEventListener('DOMContentLoaded', function(){
   const selectSedes = document.getElementById('select-sedes');
   const form = document.getElementById('form-guardia');
   const msg = document.getElementById('guardia-msg');
+  const chkAgregar = document.getElementById('chk-agregar-rotacion');
+  const divCiclo = document.getElementById('div-ciclo-agregar');
+  const selectCicloCrear = document.getElementById('select-ciclo-crear');
+  const divOpcionesAvanzadas = document.getElementById('div-opciones-avanzadas');
+  const chkHoraEspecifica = document.getElementById('chk-hora-especifica');
+  const divHoraInicio = document.getElementById('div-hora-inicio');
+  const inputHoraInicio = document.getElementById('input-hora-inicio');
+  const inputDuracionTurno = document.getElementById('input-duracion-turno');
 
   async function cargarSedes() {
     try {
       const res = await api('/api/sedes/');
       const list = res.sedes || [];
       selectSedes.innerHTML = list.map(s => `<option value="${s.sede_id}">${s.nombre} (${s.ciudad})</option>`).join('');
+      // Cargar ciclos para la sede inicial si el checkbox está marcado
+      if (chkAgregar.checked && list.length > 0) {
+        await cargarCiclosSede(list[0].sede_id);
+      }
     } catch (e) {
       selectSedes.innerHTML = '<option value="">Error cargando sedes</option>';
     }
   }
 
+  async function cargarCiclosSede(sedeId) {
+    if (!sedeId) {
+      selectCicloCrear.innerHTML = '<option value="">-- Seleccione una sede primero --</option>';
+      return;
+    }
+    try {
+      const ciclosRes = await api(`/api/sedes/${encodeURIComponent(sedeId)}/ciclos/`);
+      const ciclos = ciclosRes.ciclos || [];
+      if (ciclos.length === 0) {
+        selectCicloCrear.innerHTML = '<option value="">Sin rotaciones activas</option>';
+      } else {
+        selectCicloCrear.innerHTML = ciclos.map(c => `<option value="${c}">${c}</option>`).join('');
+      }
+    } catch (e) {
+      selectCicloCrear.innerHTML = '<option value="">Error cargando ciclos</option>';
+    }
+  }
+
+  // Mostrar/ocultar selector de ciclo según checkbox
+  chkAgregar.addEventListener('change', async () => {
+    if (chkAgregar.checked) {
+      divCiclo.classList.remove('d-none');
+      divOpcionesAvanzadas.classList.remove('d-none');
+      const sedeId = selectSedes.value;
+      if (sedeId) await cargarCiclosSede(sedeId);
+    } else {
+      divCiclo.classList.add('d-none');
+      divOpcionesAvanzadas.classList.add('d-none');
+    }
+  });
+
+  // Mostrar/ocultar input de hora específica
+  chkHoraEspecifica.addEventListener('change', () => {
+    if (chkHoraEspecifica.checked) {
+      divHoraInicio.classList.remove('d-none');
+    } else {
+      divHoraInicio.classList.add('d-none');
+    }
+  });
+
+  // Cargar ciclos cuando cambia la sede
+  selectSedes.addEventListener('change', async () => {
+    if (chkAgregar.checked) {
+      const sedeId = selectSedes.value;
+      await cargarCiclosSede(sedeId);
+    }
+  });
+
   async function cargarGuardias() {
     try {
       const res = await api('/api/guardias/');
       const list = res.guardias || [];
-      const rows = list.map(g => `
+      
+      // Obtener lista de guardias con turnos activos
+      const guardiasConTurnos = new Set();
+      try {
+        const eventosRes = await api('/api/reportes/eventos/');
+        const eventos = eventosRes.eventos || [];
+        // Buscar eventos recientes de tipo rotación para identificar guardias activos
+        eventos.forEach(ev => {
+          if (ev.guardia_id && ev.tipo_evento && 
+              (ev.tipo_evento.includes('ROTACION') || ev.tipo_evento.includes('TURNO'))) {
+            guardiasConTurnos.add(ev.guardia_id);
+          }
+        });
+      } catch (e) {
+        // No crítico, continuar sin badges
+      }
+      
+      const rows = list.map(g => {
+        const enRotacion = guardiasConTurnos.has(g.guardia_id);
+        const badgeRotacion = enRotacion ? 
+          '<span class="badge bg-success ms-2" title="Participando en rotaciones"><i class="bi bi-arrow-repeat"></i></span>' : '';
+        
+        return `
         <tr>
           <td>${g.guardia_id}</td>
-          <td>${g.apellidos}, ${g.nombres}</td>
+          <td>${g.apellidos}, ${g.nombres}${badgeRotacion}</td>
           <td>${g.sede_nombre||''}</td>
           <td>${g.activo}</td>
           <td>
@@ -115,9 +233,16 @@ document.addEventListener('DOMContentLoaded', function(){
                     data-sede="${g.sede_id}">Editar</button>
             <button class="btn btn-sm btn-outline-danger btn-baja" data-id="${g.guardia_id}">Dar baja</button>
             <button class="btn btn-sm btn-outline-danger btn-eliminar-guardia" data-id="${g.guardia_id}">Eliminar</button>
+            <button class="btn btn-sm btn-outline-success btn-agregar-rotacion" 
+                    data-id="${g.guardia_id}"
+                    data-sede="${g.sede_id}"
+                    data-nombre="${g.apellidos}, ${g.nombres}">
+              <i class="bi bi-plus-circle"></i> Agregar a rotación
+            </button>
           </td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
       tbody.innerHTML = rows;
     } catch (e) {
       tbody.innerHTML = `<tr><td colspan="5" class="text-danger">${e.message||e}</td></tr>`;
@@ -139,22 +264,181 @@ document.addEventListener('DOMContentLoaded', function(){
       orden_rotativo: Number(fd.get('orden_rotativo'))
     };
     try {
+      let guardiaIdCreado;
       if (form.dataset.editId) {
         const id = form.dataset.editId;
         await api(`/api/guardias/${encodeURIComponent(id)}/editar/`, { method: 'POST', body: JSON.stringify(payload) });
         msg.textContent = 'Guardia actualizada.'; msg.className='text-success';
+        guardiaIdCreado = id;
       } else {
-        await api('/api/guardias/alta/', { method: 'POST', body: JSON.stringify(payload) });
+        const res = await api('/api/guardias/alta/', { method: 'POST', body: JSON.stringify(payload) });
+        guardiaIdCreado = res.guardia_id;
         msg.textContent = 'Guardia creada.'; msg.className='text-success';
+        
+        // Si está marcado el checkbox, agregar a rotación
+        if (chkAgregar.checked && selectCicloCrear.value) {
+          msg.textContent += ' Agregando a rotación...';
+          try {
+            const payloadRot = {
+              guardia_id: Number(guardiaIdCreado),
+              sede_id: payload.sede_id,
+              ciclo: selectCicloCrear.value
+            };
+            
+            // Agregar opciones avanzadas si están configuradas
+            if (chkHoraEspecifica.checked && inputHoraInicio.value) {
+              payloadRot.hora_inicio = inputHoraInicio.value.replace('T', ' ');
+            }
+            if (inputDuracionTurno.value) {
+              payloadRot.duracion_turnos_min = Number(inputDuracionTurno.value);
+            }
+            
+            const resRot = await api('/api/rotacion/agregar-guardia/', {
+              method: 'POST',
+              body: JSON.stringify(payloadRot)
+            });
+            msg.textContent = `✓ Guardia creada y agregada a rotación. Turnos creados: ${resRot.turnos_creados||0}`;
+          } catch (eRot) {
+            msg.textContent += ' ⚠ Error al agregar a rotación: ' + (eRot.message || eRot);
+            msg.className = 'text-warning';
+          }
+        }
       }
-      setTimeout(()=>{ modal.hide(); cargarGuardias(); }, 600);
+      setTimeout(()=>{ modal.hide(); cargarGuardias(); }, 1200);
     } catch (e) {
       msg.textContent = e.message || e; msg.className='text-danger';
     }
   });
 
-  // Delegación para acciones (baja / editar)
+  // Delegación para acciones (baja / editar / agregar a rotación)
   document.addEventListener('click', async (ev) => {
+    const btnAgregar = ev.target.closest('.btn-agregar-rotacion');
+    if (btnAgregar) {
+      const guardiaId = btnAgregar.dataset.id;
+      const sedeId = btnAgregar.dataset.sede;
+      const nombre = btnAgregar.dataset.nombre;
+      
+      // Cargar ciclos disponibles para la sede
+      try {
+        const ciclosRes = await api(`/api/sedes/${encodeURIComponent(sedeId)}/ciclos/`);
+        const ciclos = ciclosRes.ciclos || [];
+        
+        if (ciclos.length === 0) {
+          alert('No hay rotaciones activas en esta sede. Genere primero una rotación desde Inicio.');
+          return;
+        }
+        
+        // Mostrar modal para seleccionar ciclo
+        const ciclosOpts = ciclos.map(c => `<option value="${c}">${c}</option>`).join('');
+        const html = `
+          <div class="modal fade" id="modalAgregarRotacion" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog"><div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">Agregar ${nombre} a rotación activa</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+              </div>
+              <div class="modal-body">
+                <p class="small text-muted">Sede ID: ${sedeId}</p>
+                <div class="mb-3">
+                  <label class="form-label">Seleccione el ciclo (rotación)</label>
+                  <select class="form-select" id="select-ciclo-agregar">${ciclosOpts}</select>
+                </div>
+                
+                <div class="card mb-3">
+                  <div class="card-header py-2">
+                    <small class="fw-bold"><i class="bi bi-sliders"></i> Opciones de integración</small>
+                  </div>
+                  <div class="card-body py-2">
+                    <div class="form-check mb-2">
+                      <input class="form-check-input" type="checkbox" id="chk-hora-especifica-agregar">
+                      <label class="form-check-label" for="chk-hora-especifica-agregar">
+                        <small>Especificar hora de inicio del turno</small>
+                      </label>
+                    </div>
+                    <div id="div-hora-inicio-agregar" class="mb-2 d-none">
+                      <label class="form-label small">Hora de inicio</label>
+                      <input type="datetime-local" class="form-control form-control-sm" id="input-hora-inicio-agregar">
+                      <div class="form-text">Se ajustarán los turnos vecinos automáticamente</div>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label small">Duración de cada turno (minutos)</label>
+                      <input type="number" class="form-control form-control-sm" id="input-duracion-agregar" 
+                             value="120" min="30" max="480" step="30">
+                    </div>
+                  </div>
+                </div>
+                
+                <div class="alert alert-info small">
+                  <i class="bi bi-info-circle"></i> Se generarán turnos automáticamente para este guardia 
+                  ${''/* en los huecos disponibles o en el momento especificado */}.
+                </div>
+                <div id="agregar-msg" class="small"></div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-success" id="btn-confirm-agregar">Agregar</button>
+              </div>
+            </div></div>
+          </div>`;
+        let container = document.getElementById('modalAgregarRotacion');
+        if (container) container.remove();
+        document.body.insertAdjacentHTML('beforeend', html);
+        const modalEl = document.getElementById('modalAgregarRotacion');
+        const modal = new bootstrap.Modal(modalEl);
+        modal.show();
+        
+        // Configurar eventos del modal
+        const chkHoraEspAgregar = document.getElementById('chk-hora-especifica-agregar');
+        const divHoraAgregar = document.getElementById('div-hora-inicio-agregar');
+        chkHoraEspAgregar.addEventListener('change', () => {
+          divHoraAgregar.classList.toggle('d-none', !chkHoraEspAgregar.checked);
+        });
+        
+        modalEl.addEventListener('click', async (e2) => {
+          if (e2.target && e2.target.id === 'btn-confirm-agregar') {
+            const msgEl = document.getElementById('agregar-msg');
+            const selectCiclo = document.getElementById('select-ciclo-agregar');
+            const inputHoraAgregar = document.getElementById('input-hora-inicio-agregar');
+            const inputDurAgregar = document.getElementById('input-duracion-agregar');
+            const cicloSel = selectCiclo.value;
+            msgEl.textContent = 'Procesando...';
+            msgEl.className = 'small text-muted';
+            
+            try {
+              const payloadRot = {
+                guardia_id: Number(guardiaId),
+                sede_id: Number(sedeId),
+                ciclo: cicloSel
+              };
+              
+              // Opciones avanzadas
+              if (chkHoraEspAgregar.checked && inputHoraAgregar.value) {
+                payloadRot.hora_inicio = inputHoraAgregar.value.replace('T', ' ');
+              }
+              if (inputDurAgregar.value) {
+                payloadRot.duracion_turnos_min = Number(inputDurAgregar.value);
+              }
+              
+              const res = await api('/api/rotacion/agregar-guardia/', {
+                method: 'POST',
+                body: JSON.stringify(payloadRot)
+              });
+              msgEl.textContent = `✓ ${res.message || 'Guardia agregado exitosamente'}. Turnos creados: ${res.turnos_creados||0}`;
+              msgEl.className = 'small text-success';
+              setTimeout(() => { modal.hide(); }, 1500);
+            } catch (err) {
+              msgEl.textContent = '✗ ' + (err.message || err);
+              msgEl.className = 'small text-danger';
+            }
+          }
+        }, { once: true });
+        
+      } catch (e) {
+        alert('Error al cargar ciclos: ' + (e.message || e));
+      }
+      return;
+    }
+
     const btnDel = ev.target.closest('.btn-eliminar-guardia');
     if (btnDel) {
       const id = btnDel.dataset.id;

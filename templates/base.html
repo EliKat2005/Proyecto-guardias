@@ -11,100 +11,126 @@
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
     <!-- Custom CSS -->
     {% load static %}
     <link rel="stylesheet" href="{% static 'css/custom.css' %}">
     
     {% block extra_css %}{% endblock %}
 </head>
-<body class="d-flex flex-column min-vh-100">
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="{% url 'home' %}">
-                <i class="bi bi-shield-check me-2"></i>
-                Agencia de Guardias
-            </a>
-            
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
+<body class="modern-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-logo">
+                <i class="bi bi-shield-shaded"></i>
+                <span class="sidebar-logo-text">GuardControl</span>
+            </div>
+            <button class="sidebar-toggle" id="sidebar-toggle" title="Colapsar menú">
+                <i class="bi bi-chevron-left"></i>
             </button>
+        </div>
+        
+        <nav class="sidebar-nav">
+            <a href="{% url 'home' %}" class="sidebar-link {% if request.path == '/' %}active{% endif %}">
+                <i class="bi bi-grid-1x2"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="{% url 'guardias' %}" class="sidebar-link {% if '/guardias/' in request.path %}active{% endif %}">
+                <i class="bi bi-people"></i>
+                <span>Guardias</span>
+            </a>
+            <a href="{% url 'sedes' %}" class="sidebar-link {% if '/sedes/' in request.path %}active{% endif %}">
+                <i class="bi bi-building"></i>
+                <span>Sedes</span>
+            </a>
+            <a href="{% url 'jornadas' %}" class="sidebar-link {% if '/jornadas/' in request.path %}active{% endif %}">
+                <i class="bi bi-clock"></i>
+                <span>Jornadas</span>
+            </a>
+            <a href="{% url 'reportes' %}" class="sidebar-link {% if '/reportes/' in request.path %}active{% endif %}">
+                <i class="bi bi-bar-chart-line"></i>
+                <span>Reportes</span>
+            </a>
+        </nav>
+        
+        <div class="sidebar-footer">
+            <div class="sidebar-user">
+                <div class="user-avatar">
+                    <i class="bi bi-person-circle"></i>
+                </div>
+                <div class="user-info">
+                    <div class="user-name">Administrador</div>
+                    <div class="user-role">Sistema</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Wrapper -->
+    <div class="main-wrapper">
+        <!-- Topbar -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <button class="btn btn-sm btn-ghost mobile-sidebar-toggle" id="mobile-sidebar-toggle">
+                    <i class="bi bi-list fs-5"></i>
+                </button>
+                <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+            </div>
             
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="{% url 'home' %}">
-                            <i class="bi bi-house me-1"></i>Inicio
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if '/guardias/' in request.path %}active{% endif %}" href="{% url 'guardias' %}">
-                            <i class="bi bi-people me-1"></i>Guardias
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if '/jornadas/' in request.path %}active{% endif %}" href="{% url 'jornadas' %}">
-                            <i class="bi bi-sun me-1"></i>Jornadas
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if '/sedes/' in request.path %}active{% endif %}" href="{% url 'sedes' %}">
-                            <i class="bi bi-building me-1"></i>Sedes
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if '/reportes/' in request.path %}active{% endif %}" href="{% url 'reportes' %}">
-                            <i class="bi bi-clock-history me-1"></i>Reportes
-                        </a>
-                    </li>
-                </ul>
-                
-                <div class="navbar-nav align-items-center gap-2">
-                    <button class="btn btn-sm btn-outline-light" id="btn-theme-toggle" type="button" title="Cambiar tema">
-                        <i class="bi bi-moon-stars" id="icon-theme"></i>
-                    </button>
-                    <div class="nav-item">
-                        <span class="nav-link text-light">
-                            <i class="bi bi-person-circle me-1"></i>Administrador
-                        </span>
-                    </div>
+            <div class="topbar-right">
+                <button class="btn btn-sm btn-ghost" id="btn-theme-toggle" title="Cambiar tema">
+                    <i class="bi bi-moon-stars" id="icon-theme"></i>
+                </button>
+                <div class="topbar-divider"></div>
+                <button class="btn btn-sm btn-ghost position-relative" title="Notificaciones">
+                    <i class="bi bi-bell"></i>
+                    <span class="notification-badge">3</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="content-wrapper">
+            {% if messages %}
+                <div class="messages-container">
+                    {% for message in messages %}
+                        <div class="alert alert-{{ message.tags }} alert-dismissible fade show modern-alert" role="alert">
+                            <i class="bi bi-{% if message.tags == 'success' %}check-circle{% elif message.tags == 'danger' %}x-circle{% elif message.tags == 'warning' %}exclamation-triangle{% else %}info-circle{% endif %} me-2"></i>
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+
+            {% block content %}
+            <!-- El contenido específico de cada página irá aquí -->
+            {% endblock %}
+        </main>
+
+        <!-- Footer -->
+        <footer class="content-footer">
+            <div class="footer-content">
+                <div class="footer-left">
+                    <span class="text-muted">© 2025 GuardControl</span>
+                    <span class="footer-divider">•</span>
+                    <span class="text-muted">v2.0.0</span>
+                </div>
+                <div class="footer-right">
+                    <a href="#" class="footer-link">Soporte</a>
+                    <a href="#" class="footer-link">Documentación</a>
                 </div>
             </div>
-        </div>
-    </nav>
+        </footer>
+    </div>
 
-    <!-- Main Content -->
-    <main class="container my-4 flex-grow-1">
-        {% if messages %}
-            {% for message in messages %}
-                <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
-                    {{ message }}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-            {% endfor %}
-        {% endif %}
-
-        {% block content %}
-        <!-- El contenido específico de cada página irá aquí -->
-        {% endblock %}
-    </main>
-
-    <!-- Footer -->
-    <footer class="bg-dark text-light py-4 mt-auto">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-6">
-                    <h5>Sistema de Gestión de Guardias</h5>
-                    <p class="mb-0">Plataforma para la administración y rotación de servicios de guardia.</p>
-                </div>
-                <div class="col-md-6 text-md-end">
-                    <p class="mb-0">
-                        <i class="bi bi-cpu"></i> v1.0.0
-                    </p>
-                </div>
-            </div>
-        </div>
-    </footer>
+    <!-- Overlay para mobile -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
     <!-- Bootstrap 5 JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
@@ -195,6 +221,39 @@
             const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
             tooltipTriggerList.forEach(function (el) { new bootstrap.Tooltip(el); });
 
+            // SIDEBAR TOGGLE
+            const sidebar = document.getElementById('sidebar');
+            const sidebarToggle = document.getElementById('sidebar-toggle');
+            const mobileSidebarToggle = document.getElementById('mobile-sidebar-toggle');
+            const sidebarOverlay = document.getElementById('sidebar-overlay');
+            const savedSidebarState = localStorage.getItem('sidebar-collapsed');
+            
+            if (savedSidebarState === 'true') {
+                document.body.classList.add('sidebar-collapsed');
+            }
+            
+            if (sidebarToggle) {
+                sidebarToggle.addEventListener('click', () => {
+                    document.body.classList.toggle('sidebar-collapsed');
+                    const isCollapsed = document.body.classList.contains('sidebar-collapsed');
+                    localStorage.setItem('sidebar-collapsed', isCollapsed);
+                    sidebarToggle.querySelector('i').className = isCollapsed ? 'bi bi-chevron-right' : 'bi bi-chevron-left';
+                });
+            }
+            
+            // Mobile sidebar toggle
+            if (mobileSidebarToggle) {
+                mobileSidebarToggle.addEventListener('click', () => {
+                    document.body.classList.add('sidebar-mobile-open');
+                });
+            }
+            
+            if (sidebarOverlay) {
+                sidebarOverlay.addEventListener('click', () => {
+                    document.body.classList.remove('sidebar-mobile-open');
+                });
+            }
+
             // THEME TOGGLER (Bootstrap 5.3 data-bs-theme)
             const root = document.documentElement;
             const btnTheme = document.getElementById('btn-theme-toggle');
@@ -216,16 +275,19 @@
             const scrollBtn = document.createElement('button');
             scrollBtn.type = 'button';
             scrollBtn.id = 'btn-scroll-top';
-            scrollBtn.className = 'btn btn-primary position-fixed';
-            scrollBtn.style.right = '1rem';
-            scrollBtn.style.bottom = '1rem';
+            scrollBtn.className = 'btn-scroll-top';
             scrollBtn.style.display = 'none';
             scrollBtn.innerHTML = '<i class="bi bi-arrow-up"></i>';
+            scrollBtn.title = 'Ir arriba';
             document.body.appendChild(scrollBtn);
-            window.addEventListener('scroll', () => {
-                scrollBtn.style.display = window.scrollY > 300 ? 'inline-flex' : 'none';
-            });
-            scrollBtn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+            
+            const contentWrapper = document.querySelector('.content-wrapper');
+            if (contentWrapper) {
+                contentWrapper.addEventListener('scroll', () => {
+                    scrollBtn.style.display = contentWrapper.scrollTop > 300 ? 'flex' : 'none';
+                });
+                scrollBtn.addEventListener('click', () => contentWrapper.scrollTo({ top: 0, behavior: 'smooth' }));
+            }
         });
     </script>
 

@@ -60,6 +60,49 @@
             <div id="del-rot-msg" class="small mt-1"></div>
           </div>
         </form>
+        <hr/>
+        <form id="form-mod-horas" class="row g-3 mt-2">
+          <div class="col-12">
+            <label class="form-label fw-bold">
+              <i class="bi bi-clock-history me-2"></i>Modificar horas de turno en ciclo activo
+            </label>
+            <p class="small text-muted mb-2">Redistribuye automáticamente las 24 horas con nueva duración de turnos</p>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Sede</label>
+            <select class="form-select" id="mod_horas_sede" required>
+              <option value="">-- Sede --</option>
+              {% for s in sedes %}
+                <option value="{{ s.sede_id }}">{{ s.nombre }} ({{ s.ciudad }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Ciclo</label>
+            <select class="form-select" id="mod_horas_ciclo" required>
+              <option value="">-- Ciclo --</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nueva duración (minutos)</label>
+            <input type="number" class="form-control" id="mod_horas_duracion" 
+                   value="120" min="30" max="480" step="30" required>
+            <div class="form-text">Entre 30 y 480 minutos</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Guardia específico (opcional)</label>
+            <select class="form-select" id="mod_horas_guardia">
+              <option value="">-- Todos los guardias --</option>
+            </select>
+            <div class="form-text">Dejar vacío para redistribuir todos</div>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-warning w-100" type="submit">
+              <i class="bi bi-arrow-repeat me-2"></i>Redistribuir turnos
+            </button>
+            <div id="mod-horas-msg" class="small mt-1"></div>
+          </div>
+        </form>
       </div>
     </div>
   </div>
@@ -167,6 +210,9 @@ document.addEventListener('DOMContentLoaded', function () {
   const btnRefreshEventos = document.getElementById('btn-refresh-eventos');
   const delRotSede = document.getElementById('del_rot_sede');
   const delRotCicloSel = document.getElementById('del_rot_ciclo_sel');
+  const modHorasSede = document.getElementById('mod_horas_sede');
+  const modHorasCiclo = document.getElementById('mod_horas_ciclo');
+  const modHorasGuardia = document.getElementById('mod_horas_guardia');
 
   // Helper para badges de tipo de evento
   function badgeTipo(tipo) {
@@ -332,6 +378,77 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // Modificar horas de turno
+  const formModHoras = document.getElementById('form-mod-horas');
+  if (formModHoras) {
+    formModHoras.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const sede_id = modHorasSede.value;
+      const ciclo = modHorasCiclo.value;
+      const duracion = document.getElementById('mod_horas_duracion').value;
+      const guardia_id = modHorasGuardia.value;
+      const msg = document.getElementById('mod-horas-msg');
+      msg.textContent = ''; msg.className = '';
+      
+      if (!sede_id || !ciclo || !duracion) {
+        msg.textContent = 'Complete todos los campos obligatorios';
+        msg.className = 'text-danger';
+        return;
+      }
+      
+      const duracionNum = Number(duracion);
+      if (duracionNum < 30 || duracionNum > 480) {
+        msg.textContent = 'La duración debe estar entre 30 y 480 minutos';
+        msg.className = 'text-danger';
+        return;
+      }
+      
+      const payload = {
+        sede_id: Number(sede_id),
+        ciclo: ciclo,
+        nueva_duracion_min: duracionNum
+      };
+      
+      if (guardia_id) {
+        payload.guardia_id = Number(guardia_id);
+        if (!confirm(`¿Redistribuir los turnos del guardia seleccionado con duración de ${duracionNum} minutos?`)) return;
+      } else {
+        if (!confirm(`¿Redistribuir TODOS los turnos del ciclo con duración de ${duracionNum} minutos? Esto eliminará y recreará todos los turnos.`)) return;
+      }
+      
+      msg.textContent = 'Procesando...';
+      msg.className = 'text-muted';
+      
+      try {
+        const res = await api('/api/rotacion/modificar-horas/', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        
+        if (res.guardia_id) {
+          msg.textContent = `✓ Turnos del guardia redistribuidos. Nuevos turnos: ${res.turnos_creados || 0}`;
+        } else {
+          msg.textContent = `✓ Rotación redistribuida. ${res.guardias_afectados || 0} guardias, ${res.turnos_totales_creados || 0} turnos creados`;
+        }
+        msg.className = 'text-success';
+        cargarEventos();
+        
+        // Recargar la vista de turnos si estaba visible
+        if (turnosBox && !turnosBox.classList.contains('d-none')) {
+          // Simular click en consultar para refrescar
+          setTimeout(() => {
+            if (qsede.value === sede_id && qcicloSel.value === ciclo) {
+              document.getElementById('form-q').dispatchEvent(new Event('submit'));
+            }
+          }, 500);
+        }
+      } catch (e) {
+        msg.textContent = '✗ ' + (e.message || e);
+        msg.className = 'text-danger';
+      }
+    });
+  }
+
   // Consultar turnos de un ciclo
   const formQ = document.getElementById('form-q');
   if (formQ) {
@@ -413,6 +530,75 @@ document.addEventListener('DOMContentLoaded', function () {
   // Eventos de cambio de sede para cargar ciclos
   if (qsede) qsede.addEventListener('change', () => loadCyclesForSede(qsede.value, qcicloSel, '-- Seleccione un ciclo --'));
   if (delRotSede) delRotSede.addEventListener('change', () => loadCyclesForSede(delRotSede.value, delRotCicloSel, '-- Ciclo --'));
+  if (modHorasSede) {
+    modHorasSede.addEventListener('change', async () => {
+      await loadCyclesForSede(modHorasSede.value, modHorasCiclo, '-- Ciclo --');
+      // También cargar guardias de la sede
+      await cargarGuardiasSede(modHorasSede.value);
+    });
+  }
+  if (modHorasCiclo) {
+    modHorasCiclo.addEventListener('change', async () => {
+      if (modHorasSede.value && modHorasCiclo.value) {
+        await cargarGuardiasCiclo(modHorasSede.value, modHorasCiclo.value);
+      }
+    });
+  }
+
+  // Función para cargar guardias de una sede
+  async function cargarGuardiasSede(sedeId) {
+    if (!modHorasGuardia) return;
+    modHorasGuardia.innerHTML = '<option value="">-- Todos los guardias --</option>';
+    if (!sedeId) return;
+    
+    try {
+      const res = await api(`/api/guardias/?sede_id=${encodeURIComponent(sedeId)}&activo=S`);
+      const guardias = res.guardias || [];
+      const opts = guardias.map(g => 
+        `<option value="${g.guardia_id}">${g.apellidos}, ${g.nombres}</option>`
+      ).join('');
+      modHorasGuardia.innerHTML = '<option value="">-- Todos los guardias --</option>' + opts;
+    } catch (e) {
+      console.error('Error cargando guardias:', e);
+    }
+  }
+
+  // Función para cargar guardias de un ciclo específico
+  async function cargarGuardiasCiclo(sedeId, ciclo) {
+    if (!modHorasGuardia) return;
+    modHorasGuardia.innerHTML = '<option value="">-- Todos los guardias --</option>';
+    if (!sedeId || !ciclo) return;
+    
+    try {
+      const res = await api(`/api/turnos/${encodeURIComponent(sedeId)}/${encodeURIComponent(ciclo)}/`);
+      const turnos = res.turnos || [];
+      // Obtener guardias únicos del ciclo
+      const guardiasSet = new Set();
+      const guardiasMap = new Map();
+      turnos.forEach(t => {
+        if (t.turno_id && t.guardia) {
+          // Extraer ID del guardia si está disponible
+          const match = t.guardia.match(/ID[:\s]*(\d+)/i);
+          if (match) {
+            guardiasSet.add(match[1]);
+            guardiasMap.set(match[1], t.guardia);
+          }
+        }
+      });
+      
+      if (guardiasSet.size > 0) {
+        const opts = Array.from(guardiasSet).map(gid => 
+          `<option value="${gid}">${guardiasMap.get(gid)}</option>`
+        ).join('');
+        modHorasGuardia.innerHTML = '<option value="">-- Todos los guardias --</option>' + opts;
+      } else {
+        // Fallback: cargar todos los guardias de la sede
+        await cargarGuardiasSede(sedeId);
+      }
+    } catch (e) {
+      console.error('Error cargando guardias del ciclo:', e);
+    }
+  }
 
   // Carga inicial si ya hay sede seleccionada
   if (qsede && qsede.value) loadCyclesForSede(qsede.value, qcicloSel, '-- Seleccione un ciclo --');

@@ -12,6 +12,8 @@ urlpatterns = [
     # EXISTENTES
     path('turnos/<int:sede_id>/<path:ciclo>/', views.turnos_por_sede_ciclo, name='turnos_por_sede_ciclo'),
     path('rotacion/generar/', views.generar_rotacion, name='generar_rotacion'),
+    path('rotacion/agregar-guardia/', views.rotacion_agregar_guardia, name='rotacion_agregar_guardia'),
+    path('rotacion/modificar-horas/', views.rotacion_modificar_horas, name='rotacion_modificar_horas'),
     path('turno/eliminar/<int:turno_id>/', views.eliminar_turno, name='eliminar_turno'),
     path('reportes/eventos/', views.eventos, name='eventos'),
 
